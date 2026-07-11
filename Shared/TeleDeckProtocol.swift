@@ -23,7 +23,7 @@ enum ActionType: String, Codable {
 
 /// 実行するアクションの内容
 struct ActionPayload: Codable {
-  let type: ActionType
+  var type: ActionType
   /// launchApp: アプリ名またはBundle ID / openURL: URL文字列
   var target: String?
   /// hotkey: 送信するキーの組み合わせ（例: ["cmd", "c"]）
