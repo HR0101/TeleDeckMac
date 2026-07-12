@@ -29,6 +29,14 @@ enum ActionType: String, Codable {
   case activateApplication
   /// ウィンドウをプリセットのレイアウトへ配置する
   case windowLayout
+  /// 音量・画面の明るさなど、Macのメディアキーを送信する
+  case mediaKey
+  /// Macで起動中のアプリケーションを終了する
+  case quitApplication
+  /// Finderで指定したフォルダを開く
+  case openFinderFolder
+  /// スリープ・画面ロック・スクリーンショットなど、システム全体に関わる操作を行う
+  case systemAction
 }
 
 /// 実行するアクションの内容
@@ -52,6 +60,11 @@ struct ActionPayload: Codable {
   var tabId: Int?
   /// windowLayout: プリセット名（"left-half" / "right-half" / "maximize" / "centered" / "three-split"）
   var preset: String?
+  /// mediaKey: 送信するキー（"volumeUp" / "volumeDown" / "mute" / "brightnessUp" / "brightnessDown" /
+  /// "playPause" / "nextTrack" / "previousTrack" / "keyboardBacklightUp" / "keyboardBacklightDown"）
+  var mediaKey: String?
+  /// systemAction: 実行する操作（"sleep" / "lockScreen" / "screenSaver" / "screenshotFull" / "screenshotSelection"）
+  var systemAction: String?
 }
 
 // MARK: - メッセージ定義（設計書8章準拠）
@@ -172,6 +185,41 @@ struct TrackpadScrollMessage: Codable {
   var type: String = "trackpadScroll"
   let dx: Double
   let dy: Double
+}
+
+/// コピー履歴アイテムの種別
+enum ClipboardItemKind: String, Codable {
+  case text
+  case image
+}
+
+/// コピー履歴の1件。画像は縮小サムネイル（JPEG・Base64）のみを載せ、
+/// 貼り付け時に使う原本データはMac側にのみ保持する
+struct ClipboardHistoryEntry: Codable, Identifiable {
+  let id: UUID
+  let kind: ClipboardItemKind
+  /// text: 本文（表示用に先頭のみを送ることがある）
+  var textPreview: String?
+  /// image: 縮小・JPEG圧縮したサムネイルのBase64文字列
+  var imageThumbnailBase64: String?
+  let timestamp: Date
+}
+
+/// Mac → iPad: コピー履歴一覧。履歴が変化するたび・iPadからの取得要求への応答の両方で送信される
+struct ClipboardHistoryMessage: Codable {
+  var type: String = "clipboardHistory"
+  let items: [ClipboardHistoryEntry]
+}
+
+/// iPad → Mac: 現在のコピー履歴一覧の取得要求
+struct GetClipboardHistoryMessage: Codable {
+  var type: String = "getClipboardHistory"
+}
+
+/// iPad → Mac: 指定した履歴アイテムをMacのクリップボードにセットし、貼り付け（Cmd+V）まで実行する要求
+struct PasteClipboardItemMessage: Codable {
+  var type: String = "pasteClipboardItem"
+  let itemId: UUID
 }
 
 /// 受信したJSONの `type` フィールドだけを覗き見るための最小デコード用の型

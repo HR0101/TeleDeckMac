@@ -11,10 +11,6 @@ import Observation
 
 @Observable
 final class ProfileStore {
-  /// iPad側（Models/ProfileStore.swift）と同じグリッドサイズ。編集画面のグリッド表示で使う
-  static let gridRows = 3
-  static let gridCols = 5
-
   private(set) var profiles: [ProfileConfig]
   private(set) var activeProfileId: UUID
 

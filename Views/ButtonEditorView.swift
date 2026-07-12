@@ -18,6 +18,88 @@ private let commonSFSymbols = [
 
 private let modifierKeys = ["cmd", "shift", "opt", "ctrl"]
 
+private enum ButtonEditorStep {
+  case action
+  case appearance
+}
+
+private struct ActionChoice: Identifiable {
+  let type: ActionType
+  /// mediaKey用。同じActionType内で複数の選択肢（音量を上げる/下げる等）を区別するためのキー
+  let mediaKey: String?
+  /// systemAction用。同じActionType内で複数の選択肢（スリープ/ロック等）を区別するためのキー
+  let systemAction: String?
+  let title: String
+  let description: String
+  let systemImage: String
+
+  init(
+    type: ActionType,
+    mediaKey: String? = nil,
+    systemAction: String? = nil,
+    title: String,
+    description: String,
+    systemImage: String
+  ) {
+    self.type = type
+    self.mediaKey = mediaKey
+    self.systemAction = systemAction
+    self.title = title
+    self.description = description
+    self.systemImage = systemImage
+  }
+
+  var id: String {
+    let suffix = mediaKey ?? systemAction
+    return suffix.map { "\(type.rawValue)-\($0)" } ?? type.rawValue
+  }
+}
+
+private struct ActionChoiceGroup: Identifiable {
+  let title: String
+  let choices: [ActionChoice]
+
+  var id: String { title }
+}
+
+private let actionChoiceGroups = [
+  ActionChoiceGroup(title: "システム", choices: [
+    ActionChoice(type: .openURL, title: "Webサイト", description: "指定したURLをブラウザで開きます", systemImage: "globe"),
+    ActionChoice(type: .hotkey, title: "ホットキー", description: "キーボードショートカットを送信します", systemImage: "keyboard"),
+    ActionChoice(type: .launchApp, title: "アプリケーションを開く", description: "Macのアプリケーションを起動します", systemImage: "macwindow"),
+    ActionChoice(type: .quitApplication, title: "アプリケーションを終了", description: "起動中のMacアプリケーションを終了します", systemImage: "xmark.app"),
+    ActionChoice(type: .typeText, title: "テキスト", description: "登録したテキストを入力します", systemImage: "text.cursor"),
+    ActionChoice(type: .openFinderFolder, title: "Finderでフォルダを開く", description: "指定したフォルダをFinderで開きます", systemImage: "folder")
+  ]),
+  ActionChoiceGroup(title: "オーディオ・画面", choices: [
+    ActionChoice(type: .setVolume, title: "音量を設定", description: "Macの出力音量を変更します", systemImage: "speaker.wave.2"),
+    ActionChoice(type: .mediaKey, mediaKey: "volumeUp", title: "音量を上げる", description: "1段階、音量を上げます", systemImage: "speaker.wave.3"),
+    ActionChoice(type: .mediaKey, mediaKey: "volumeDown", title: "音量を下げる", description: "1段階、音量を下げます", systemImage: "speaker.wave.1"),
+    ActionChoice(type: .mediaKey, mediaKey: "mute", title: "ミュート切り替え", description: "出力音量のミュートを切り替えます", systemImage: "speaker.slash"),
+    ActionChoice(type: .mediaKey, mediaKey: "brightnessUp", title: "画面を明るく", description: "1段階、画面の明るさを上げます", systemImage: "sun.max"),
+    ActionChoice(type: .mediaKey, mediaKey: "brightnessDown", title: "画面を暗く", description: "1段階、画面の明るさを下げます", systemImage: "sun.min"),
+    ActionChoice(type: .mediaKey, mediaKey: "keyboardBacklightUp", title: "キーボードを明るく", description: "キーボードバックライトを明るくします", systemImage: "keyboard.badge.ellipsis"),
+    ActionChoice(type: .mediaKey, mediaKey: "keyboardBacklightDown", title: "キーボードを暗く", description: "キーボードバックライトを暗くします", systemImage: "keyboard")
+  ]),
+  ActionChoiceGroup(title: "メディア再生", choices: [
+    ActionChoice(type: .mediaKey, mediaKey: "playPause", title: "再生/一時停止", description: "再生中のメディアを再生・一時停止します", systemImage: "playpause.fill"),
+    ActionChoice(type: .mediaKey, mediaKey: "nextTrack", title: "次のトラック", description: "次のトラックにスキップします", systemImage: "forward.end.fill"),
+    ActionChoice(type: .mediaKey, mediaKey: "previousTrack", title: "前のトラック", description: "前のトラックに戻ります", systemImage: "backward.end.fill")
+  ]),
+  ActionChoiceGroup(title: "電源・画面キャプチャ", choices: [
+    ActionChoice(type: .systemAction, systemAction: "sleep", title: "スリープ", description: "Macをスリープさせます", systemImage: "moon.fill"),
+    ActionChoice(type: .systemAction, systemAction: "lockScreen", title: "画面をロック", description: "画面をロックします", systemImage: "lock.fill"),
+    ActionChoice(type: .systemAction, systemAction: "screenSaver", title: "スクリーンセーバーを開始", description: "スクリーンセーバーをすぐに開始します", systemImage: "sparkles"),
+    ActionChoice(type: .systemAction, systemAction: "screenshotFull", title: "スクリーンショット（全画面）", description: "画面全体のスクリーンショットを撮ります", systemImage: "camera.viewfinder"),
+    ActionChoice(type: .systemAction, systemAction: "screenshotSelection", title: "スクリーンショット（範囲選択）", description: "選択した範囲のスクリーンショットを撮ります", systemImage: "crop")
+  ]),
+  ActionChoiceGroup(title: "操作", choices: [
+    ActionChoice(type: .multiAction, title: "マルチアクション", description: "複数の操作を順番に実行します", systemImage: "list.number"),
+    ActionChoice(type: .openFolder, title: "フォルダを作成", description: "パネル内にボタンの階層を作ります", systemImage: "folder"),
+    ActionChoice(type: .windowLayout, title: "ウィンドウ配置", description: "前面のウィンドウを指定位置へ移動します", systemImage: "rectangle.split.2x1")
+  ])
+]
+
 /// ウィンドウ配置アクションのプリセット。rawValueはMac側WindowLayoutManagerが解釈する文字列と一致させる
 private enum WindowLayoutPreset: String, CaseIterable, Identifiable {
   case leftHalf = "left-half"
@@ -42,6 +124,7 @@ private enum WindowLayoutPreset: String, CaseIterable, Identifiable {
 struct ButtonEditorView: View {
   @Environment(\.dismiss) private var dismiss
   @State private var draft: ButtonConfig
+  @State private var editStep: ButtonEditorStep = .action
 
   let onSave: (ButtonConfig) -> Void
 
@@ -53,47 +136,106 @@ struct ButtonEditorView: View {
   var body: some View {
     NavigationStack {
       Form {
-        Section("表示") {
-          TextField("ラベル", text: $draft.label)
-          iconSection
-        }
-
-        Section("アクション") {
-          Picker("種別", selection: $draft.action.type) {
-            Text("アプリ起動").tag(ActionType.launchApp)
-            Text("URLを開く").tag(ActionType.openURL)
-            Text("ホットキー").tag(ActionType.hotkey)
-            Text("定型文入力").tag(ActionType.typeText)
-            Text("音量調整").tag(ActionType.setVolume)
-            Text("マルチアクション").tag(ActionType.multiAction)
-            Text("フォルダー").tag(ActionType.openFolder)
-            Text("ウィンドウ配置").tag(ActionType.windowLayout)
+        if editStep == .action {
+          actionSelectionSections
+          Section("アクションの設定") {
+            actionParameterFields
           }
-          .onChange(of: draft.action.type) { _, newType in
-            // 初めてウィンドウ配置に切り替えた時点でプリセットを既定値に確定させ、保存時にnilのままにならないようにする
-            if newType == .windowLayout, draft.action.preset == nil {
-              draft.action.preset = WindowLayoutPreset.leftHalf.rawValue
-            }
+        } else {
+          Section("選択したアクション") {
+            Label(selectedActionTitle, systemImage: selectedActionImage)
           }
-
-          actionParameterFields
+          Section("表示") {
+            TextField("ラベル", text: $draft.label)
+            iconSection
+          }
         }
       }
       .formStyle(.grouped)
-      .navigationTitle("ボタン編集")
+      .navigationTitle(editStep == .action ? "アクションを選択" : "表示を設定")
       .toolbar {
         ToolbarItem(placement: .cancellationAction) {
-          Button("キャンセル") { dismiss() }
+          Button(editStep == .action ? "キャンセル" : "戻る") {
+            if editStep == .action {
+              dismiss()
+            } else {
+              editStep = .action
+            }
+          }
         }
         ToolbarItem(placement: .confirmationAction) {
-          Button("保存") {
-            onSave(draft)
-            dismiss()
+          Button(editStep == .action ? "次へ" : "保存") {
+            if editStep == .action {
+              editStep = .appearance
+            } else {
+              onSave(draft)
+              dismiss()
+            }
           }
         }
       }
     }
     .frame(minWidth: 480, minHeight: 520)
+  }
+
+  @ViewBuilder
+  private var actionSelectionSections: some View {
+    ForEach(actionChoiceGroups) { group in
+      Section(group.title) {
+        ForEach(group.choices) { choice in
+          Button {
+            selectAction(choice)
+          } label: {
+            HStack(spacing: 12) {
+              Image(systemName: choice.systemImage)
+                .font(.title3)
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 28)
+              VStack(alignment: .leading, spacing: 3) {
+                Text(choice.title)
+                  .font(.body.weight(.medium))
+                  .foregroundStyle(Color.primary)
+                Text(choice.description)
+                  .font(.caption)
+                  .foregroundStyle(Color.secondary)
+              }
+              Spacer()
+              if draft.action.type == choice.type,
+                 draft.action.mediaKey == choice.mediaKey,
+                 draft.action.systemAction == choice.systemAction {
+                Image(systemName: "checkmark.circle.fill")
+                  .foregroundStyle(Color.accentColor)
+              }
+            }
+            .contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+        }
+      }
+    }
+  }
+
+  private var selectedActionChoice: ActionChoice? {
+    actionChoiceGroups.flatMap(\.choices).first {
+      $0.type == draft.action.type && $0.mediaKey == draft.action.mediaKey && $0.systemAction == draft.action.systemAction
+    }
+  }
+
+  private var selectedActionTitle: String {
+    selectedActionChoice?.title ?? "アクション"
+  }
+
+  private var selectedActionImage: String {
+    selectedActionChoice?.systemImage ?? "bolt"
+  }
+
+  private func selectAction(_ choice: ActionChoice) {
+    draft.action.type = choice.type
+    draft.action.mediaKey = choice.mediaKey
+    draft.action.systemAction = choice.systemAction
+    if choice.type == .windowLayout, draft.action.preset == nil {
+      draft.action.preset = WindowLayoutPreset.leftHalf.rawValue
+    }
   }
 
   // MARK: - アイコン選択
@@ -168,15 +310,21 @@ struct ButtonEditorView: View {
       Text("このボタンをタップすると中のボタン一覧を開きます")
         .font(.caption)
         .foregroundStyle(.secondary)
-    case .activateTab, .closeTab, .activateApplication:
+    case .activateTab, .closeTab:
       // タブ一覧画面から生成されるアクションのため、この汎用エディタでは編集項目を出さない
       Text("タブ一覧から設定されるアクションです")
         .font(.caption)
         .foregroundStyle(.secondary)
-    case .activateApplication:
+    case .activateApplication, .quitApplication:
       launchAppFields
     case .windowLayout:
       windowLayoutFields
+    case .mediaKey, .systemAction:
+      Text("「\(selectedActionTitle)」を送信します")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    case .openFinderFolder:
+      openFinderFolderFields
     }
   }
 
@@ -187,6 +335,25 @@ struct ButtonEditorView: View {
         chooseApplication()
       }
     }
+  }
+
+  private var openFinderFolderFields: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      TextField("フォルダのパス", text: targetBinding)
+      Button("フォルダを選択...") {
+        chooseFolder()
+      }
+    }
+  }
+
+  /// NSOpenPanelでフォルダを選ばせ、パスをtargetへ自動入力する
+  private func chooseFolder() {
+    let panel = NSOpenPanel()
+    panel.canChooseDirectories = true
+    panel.canChooseFiles = false
+    panel.allowsMultipleSelection = false
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+    draft.action.target = url.path
   }
 
   /// NSOpenPanelで.appを選ばせ、Bundle IDをtargetへ自動入力する
@@ -358,8 +525,9 @@ private struct StepRow: View {
       Stepper("音量: \(step.volume ?? 50)", value: volumeBinding, in: 0...100, step: 5)
     case .delay:
       Stepper("待機: \(step.ms ?? 500) ms", value: msBinding, in: 0...10000, step: 100)
-    case .multiAction, .openFolder, .activateTab, .closeTab, .activateApplication, .windowLayout:
-      // マルチアクションのステップにはフォルダー・タブ操作・アプリ切替・ウィンドウ配置・入れ子のマルチアクションを登録できない
+    case .multiAction, .openFolder, .activateTab, .closeTab, .activateApplication, .windowLayout, .mediaKey,
+         .quitApplication, .openFinderFolder, .systemAction:
+      // マルチアクションのステップには一部の高度なアクション・入れ子のマルチアクションを登録できない
       Text("マルチアクション内には登録できません")
         .font(.caption)
         .foregroundStyle(.secondary)

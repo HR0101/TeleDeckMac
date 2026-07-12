@@ -65,6 +65,14 @@ final class ActionExecutor {
       completion(.success(()))
     case .windowLayout:
       windowLayoutManager.apply(preset: action.preset ?? "", completion: completion)
+    case .mediaKey:
+      sendMediaKey(action.mediaKey, completion: completion)
+    case .quitApplication:
+      quitApplication(named: action.target, completion: completion)
+    case .openFinderFolder:
+      openFinderFolder(action.target, completion: completion)
+    case .systemAction:
+      sendSystemAction(action.systemAction, completion: completion)
     }
   }
 
@@ -107,6 +115,40 @@ final class ActionExecutor {
     return nil
   }
 
+  // MARK: - quitApplication
+
+  private func quitApplication(named target: String?, completion: @escaping (Result<Void, Error>) -> Void) {
+    guard let target, let application = resolveRunningApplication(for: target) else {
+      completion(.failure(ExecutionError.appNotFound(target ?? "(未指定)")))
+      return
+    }
+    application.terminate()
+    completion(.success(()))
+  }
+
+  private func resolveRunningApplication(for target: String) -> NSRunningApplication? {
+    if target.contains("."),
+       let application = NSRunningApplication.runningApplications(withBundleIdentifier: target).first {
+      return application
+    }
+    return NSWorkspace.shared.runningApplications.first { $0.localizedName == target }
+  }
+
+  // MARK: - openFinderFolder
+
+  private func openFinderFolder(_ target: String?, completion: @escaping (Result<Void, Error>) -> Void) {
+    guard let target, !target.isEmpty else {
+      completion(.failure(ExecutionError.invalidURL("(未指定)")))
+      return
+    }
+    guard FileManager.default.fileExists(atPath: target) else {
+      completion(.failure(ExecutionError.invalidURL(target)))
+      return
+    }
+    NSWorkspace.shared.open(URL(fileURLWithPath: target))
+    completion(.success(()))
+  }
+
   // MARK: - openURL
 
   private func openURL(_ target: String?, completion: @escaping (Result<Void, Error>) -> Void) {
@@ -144,6 +186,13 @@ final class ActionExecutor {
     guard let resolvedKeyCode = keyCode else {
       completion(.failure(ExecutionError.unknownKey(keys.joined(separator: "+"))))
       return
+    }
+
+    // 矢印キー（123〜126）は、Mission Controlなどのシステムショートカットを正常に発火させるため
+    // 特殊キーとしてのフラグを付与する必要がある
+    if [123, 124, 125, 126].contains(resolvedKeyCode) {
+      flags.insert(.maskSecondaryFn)
+      flags.insert(.maskNumericPad)
     }
 
     guard let source = CGEventSource(stateID: .hidSystemState) else {
@@ -205,9 +254,12 @@ final class ActionExecutor {
       completion(.failure(ExecutionError.invalidVolume(volume ?? -1)))
       return
     }
+    runAppleScript("set volume output volume \(volume)", completion: completion)
+  }
 
+  private func runAppleScript(_ source: String, completion: @escaping (Result<Void, Error>) -> Void) {
     var errorDict: NSDictionary?
-    NSAppleScript(source: "set volume output volume \(volume)")?.executeAndReturnError(&errorDict)
+    NSAppleScript(source: source)?.executeAndReturnError(&errorDict)
 
     if let errorDict {
       let message = errorDict[NSAppleScript.errorMessage] as? String ?? "不明なエラー"
@@ -216,6 +268,79 @@ final class ActionExecutor {
     }
 
     completion(.success(()))
+  }
+
+  // MARK: - mediaKey
+
+  /// 音量・画面の明るさはCGEventの通常キーコードでは送信できず、
+  /// NSEventのsystemDefinedイベント（Auxキー）として送出する必要がある。
+  /// キーコードはIOKit/hidsystem/ev_keymap.hのNX_KEYTYPE_*定数の値
+  private static let mediaKeyCodes: [String: Int32] = [
+    "volumeUp": 0,
+    "volumeDown": 1,
+    "brightnessUp": 2,
+    "brightnessDown": 3,
+    "mute": 7,
+    "playPause": 16,
+    "nextTrack": 17,
+    "previousTrack": 18,
+    "keyboardBacklightUp": 21,
+    "keyboardBacklightDown": 22
+  ]
+
+  private func sendMediaKey(_ key: String?, completion: @escaping (Result<Void, Error>) -> Void) {
+    guard let key, let keyCode = Self.mediaKeyCodes[key] else {
+      completion(.failure(ExecutionError.unknownKey(key ?? "(未指定)")))
+      return
+    }
+    Self.postAuxKey(keyCode)
+    completion(.success(()))
+  }
+
+  private static func postAuxKey(_ key: Int32) {
+    func post(down: Bool) {
+      let flags = NSEvent.ModifierFlags(rawValue: UInt(down ? 0xa00 : 0xb00))
+      let data1 = (Int(key) << 16) | (down ? 0xa << 8 : 0xb << 8)
+      let event = NSEvent.otherEvent(
+        with: .systemDefined,
+        location: .zero,
+        modifierFlags: flags,
+        timestamp: 0,
+        windowNumber: 0,
+        context: nil,
+        subtype: 8,
+        data1: data1,
+        data2: -1
+      )
+      event?.cgEvent?.post(tap: .cghidEventTap)
+    }
+    post(down: true)
+    post(down: false)
+  }
+
+  // MARK: - systemAction
+
+  /// lockScreen/screenshot系はCGEventでキーボードショートカットをそのまま送るだけで実現できる。
+  /// sleep/screenSaverはSystem Eventsへの単発コマンドで済むため、AppleScript経由で実行する
+  /// （初回はシステムから「System Eventsの制御を許可しますか」という確認が表示される）
+  private func sendSystemAction(_ action: String?, completion: @escaping (Result<Void, Error>) -> Void) {
+    switch action {
+    case "sleep":
+      runAppleScript("tell application \"System Events\" to sleep", completion: completion)
+    case "screenSaver":
+      runAppleScript("tell application \"System Events\" to start current screen saver", completion: completion)
+    case "lockScreen":
+      // macOS標準の画面ロックショートカット（Control+Command+Q）と同等
+      sendHotkey(keys: ["ctrl", "cmd", "q"], completion: completion)
+    case "screenshotFull":
+      // macOS標準の全画面スクリーンショットショートカット（Command+Shift+3）と同等
+      sendHotkey(keys: ["cmd", "shift", "3"], completion: completion)
+    case "screenshotSelection":
+      // macOS標準の範囲選択スクリーンショットショートカット（Command+Shift+4）と同等
+      sendHotkey(keys: ["cmd", "shift", "4"], completion: completion)
+    default:
+      completion(.failure(ExecutionError.unknownKey(action ?? "(未指定)")))
+    }
   }
 
   // MARK: - multiAction / delay

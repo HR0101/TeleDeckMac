@@ -24,6 +24,8 @@ final class BonjourServer {
   private let foregroundAppMonitor = ForegroundAppMonitor()
   private let trackpadController = TrackpadController()
   private let profileStore: ProfileStore
+  private let clipboardHistoryStore = ClipboardHistoryStore()
+  private var applicationIconCache: [String: Data] = [:]
 
   private static let serviceType = "_teledeck._tcp"
 
@@ -42,6 +44,12 @@ final class BonjourServer {
     profileStore.onChange = { [weak self] profiles, activeProfileId in
       self?.broadcastProfileSync(profiles: profiles, activeProfileId: activeProfileId)
     }
+
+    // コピー履歴が変化したら（新規コピー検知のたび）接続中のiPadへ同期する
+    clipboardHistoryStore.onChange = { [weak self] entries in
+      self?.broadcastClipboardHistory(entries: entries)
+    }
+    clipboardHistoryStore.start()
   }
 
   /// サーバーを起動し、Bonjourで公開を開始する
@@ -90,6 +98,7 @@ final class BonjourServer {
     isRunning = false
     connectedDeviceName = nil
     foregroundAppMonitor.stop()
+    clipboardHistoryStore.stop()
   }
 
   // MARK: - 接続処理
@@ -171,6 +180,12 @@ final class BonjourServer {
         let request = try JSONDecoder().decode(TrackpadScrollMessage.self, from: data)
         guard connectedDeviceName != nil else { return }
         trackpadController.scroll(dx: request.dx, dy: request.dy)
+      case "getClipboardHistory":
+        guard connectedDeviceName != nil else { return }
+        send(ClipboardHistoryMessage(items: clipboardHistoryStore.networkEntries), on: connection)
+      case "pasteClipboardItem":
+        let request = try JSONDecoder().decode(PasteClipboardItemMessage.self, from: data)
+        handlePasteClipboardItem(request, on: connection)
       default:
         print("未知のメッセージ種別を受信しました: \(envelope.type)")
       }
@@ -188,6 +203,7 @@ final class BonjourServer {
     send(response, on: connection)
     if result.success {
       sendProfileSync(on: connection)
+      send(ClipboardHistoryMessage(items: clipboardHistoryStore.networkEntries), on: connection)
     }
   }
 
@@ -201,6 +217,7 @@ final class BonjourServer {
     let response = PairResultMessage(success: true, token: request.token, errorMessage: nil)
     send(response, on: connection)
     sendProfileSync(on: connection)
+    send(ClipboardHistoryMessage(items: clipboardHistoryStore.networkEntries), on: connection)
   }
 
   private func handleExecute(_ request: ExecuteMessage, on connection: NWConnection) {
@@ -342,13 +359,106 @@ final class BonjourServer {
     }
   }
 
+  private func handlePasteClipboardItem(_ request: PasteClipboardItemMessage, on connection: NWConnection) {
+    // クリップボードへの書き込み・貼り付けは機微な操作のため、ペアリング済みの接続のみ許可する
+    guard connectedDeviceName != nil else {
+      let response = AckMessage(requestId: request.itemId.uuidString, success: false, errorMessage: "ペアリングが完了していません")
+      send(response, on: connection)
+      return
+    }
+
+    clipboardHistoryStore.pasteItem(id: request.itemId) { [weak self] result in
+      switch result {
+      case .success:
+        self?.actionExecutor.execute(ActionPayload(type: .hotkey, keys: ["cmd", "v"])) { pasteResult in
+          let response: AckMessage
+          switch pasteResult {
+          case .success:
+            response = AckMessage(requestId: request.itemId.uuidString, success: true)
+          case .failure(let error):
+            response = AckMessage(requestId: request.itemId.uuidString, success: false, errorMessage: error.localizedDescription)
+          }
+          self?.send(response, on: connection)
+        }
+      case .failure(let error):
+        let response = AckMessage(requestId: request.itemId.uuidString, success: false, errorMessage: error.localizedDescription)
+        self?.send(response, on: connection)
+      }
+    }
+  }
+
+  private func broadcastClipboardHistory(entries: [ClipboardHistoryEntry]) {
+    guard let connection = activeConnection, connectedDeviceName != nil else { return }
+    send(ClipboardHistoryMessage(items: entries), on: connection)
+  }
+
   private func sendProfileSync(on connection: NWConnection) {
-    send(ProfileSyncMessage(profiles: profileStore.profiles, activeProfileId: profileStore.activeProfileId), on: connection)
+    send(
+      ProfileSyncMessage(
+        profiles: profilesWithApplicationIcons(profileStore.profiles),
+        activeProfileId: profileStore.activeProfileId
+      ),
+      on: connection
+    )
   }
 
   private func broadcastProfileSync(profiles: [ProfileConfig], activeProfileId: UUID) {
     guard let connection = activeConnection, connectedDeviceName != nil else { return }
-    send(ProfileSyncMessage(profiles: profiles, activeProfileId: activeProfileId), on: connection)
+    send(
+      ProfileSyncMessage(
+        profiles: profilesWithApplicationIcons(profiles),
+        activeProfileId: activeProfileId
+      ),
+      on: connection
+    )
+  }
+
+  private func profilesWithApplicationIcons(_ profiles: [ProfileConfig]) -> [ProfileConfig] {
+    var enrichedProfiles = profiles
+    for profileIndex in enrichedProfiles.indices {
+      for buttonIndex in enrichedProfiles[profileIndex].buttons.indices {
+        let action = enrichedProfiles[profileIndex].buttons[buttonIndex].action
+        guard action.type == .launchApp, let target = action.target, !target.isEmpty else {
+          enrichedProfiles[profileIndex].buttons[buttonIndex].applicationIconPNGData = nil
+          continue
+        }
+        enrichedProfiles[profileIndex].buttons[buttonIndex].applicationIconPNGData = applicationIconData(for: target)
+      }
+    }
+    return enrichedProfiles
+  }
+
+  private func applicationIconData(for target: String) -> Data? {
+    let cacheKey = target.lowercased()
+    if let cached = applicationIconCache[cacheKey] {
+      return cached
+    }
+    guard let applicationURL = applicationURL(for: target) else { return nil }
+    let icon = NSWorkspace.shared.icon(forFile: applicationURL.path)
+    guard let data = pngData(for: icon) else { return nil }
+    applicationIconCache[cacheKey] = data
+    return data
+  }
+
+  private func applicationURL(for target: String) -> URL? {
+    if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: target) {
+      return url
+    }
+
+    let applicationName = target.hasSuffix(".app") ? target : "\(target).app"
+    let searchDirectories = [
+      "/Applications",
+      "/System/Applications",
+      "/System/Applications/Utilities",
+      (NSHomeDirectory() as NSString).appendingPathComponent("Applications")
+    ]
+    for directory in searchDirectories {
+      let candidate = (directory as NSString).appendingPathComponent(applicationName)
+      if FileManager.default.fileExists(atPath: candidate) {
+        return URL(fileURLWithPath: candidate)
+      }
+    }
+    return nil
   }
 
   private func send<T: Encodable>(_ message: T, on connection: NWConnection) {

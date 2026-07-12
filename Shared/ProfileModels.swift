@@ -30,6 +30,8 @@ struct ButtonConfig: Codable, Identifiable {
   /// iconKind == .imageのとき、iPadのDocuments/Icons/配下に保存された画像（GIFを含む）のファイル名。
   /// 画像バイナリ自体はMac・iPad間で同期しない
   var iconImageFileName: String?
+  /// launchAppアクションの対象アプリからMac側で取得した64px PNGアイコン
+  var applicationIconPNGData: Data?
 
   init(
     id: UUID = UUID(),
@@ -40,7 +42,8 @@ struct ButtonConfig: Codable, Identifiable {
     action: ActionPayload,
     folderId: UUID? = nil,
     iconKind: IconKind = .sfSymbol,
-    iconImageFileName: String? = nil
+    iconImageFileName: String? = nil,
+    applicationIconPNGData: Data? = nil
   ) {
     self.id = id
     self.row = row
@@ -51,10 +54,11 @@ struct ButtonConfig: Codable, Identifiable {
     self.folderId = folderId
     self.iconKind = iconKind
     self.iconImageFileName = iconImageFileName
+    self.applicationIconPNGData = applicationIconPNGData
   }
 
   private enum CodingKeys: String, CodingKey {
-    case id, row, col, label, iconName, action, folderId, iconKind, iconImageFileName
+    case id, row, col, label, iconName, action, folderId, iconKind, iconImageFileName, applicationIconPNGData
   }
 
   // iconKind/iconImageFileNameは後から追加したフィールドのため、
@@ -71,6 +75,7 @@ struct ButtonConfig: Codable, Identifiable {
     folderId = try container.decodeIfPresent(UUID.self, forKey: .folderId)
     iconKind = try container.decodeIfPresent(IconKind.self, forKey: .iconKind) ?? .sfSymbol
     iconImageFileName = try container.decodeIfPresent(String.self, forKey: .iconImageFileName)
+    applicationIconPNGData = try container.decodeIfPresent(Data.self, forKey: .applicationIconPNGData)
   }
 }
 
@@ -81,4 +86,40 @@ struct ProfileConfig: Codable, Identifiable {
   /// このBundle IDのアプリがフォアグラウンドになった時に自動切替される。nilならデフォルトプロファイル
   var triggerAppBundleId: String?
   var buttons: [ButtonConfig]
+  /// パネルグリッドの行数・列数。プロファイルごとに変更できる
+  var gridRows: Int = 3
+  var gridColumns: Int = 5
+
+  init(
+    id: UUID = UUID(),
+    name: String,
+    triggerAppBundleId: String? = nil,
+    buttons: [ButtonConfig],
+    gridRows: Int = 3,
+    gridColumns: Int = 5
+  ) {
+    self.id = id
+    self.name = name
+    self.triggerAppBundleId = triggerAppBundleId
+    self.buttons = buttons
+    self.gridRows = gridRows
+    self.gridColumns = gridColumns
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case id, name, triggerAppBundleId, buttons, gridRows, gridColumns
+  }
+
+  // gridRows/gridColumnsは後から追加したフィールドのため、
+  // それらを持たない旧バージョンで保存されたJSONでもデコードできるよう、
+  // decodeIfPresentでデフォルト値（3行5列）にフォールバックさせる
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+    name = try container.decode(String.self, forKey: .name)
+    triggerAppBundleId = try container.decodeIfPresent(String.self, forKey: .triggerAppBundleId)
+    buttons = try container.decode([ButtonConfig].self, forKey: .buttons)
+    gridRows = try container.decodeIfPresent(Int.self, forKey: .gridRows) ?? 3
+    gridColumns = try container.decodeIfPresent(Int.self, forKey: .gridColumns) ?? 5
+  }
 }

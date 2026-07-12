@@ -8,6 +8,7 @@
 //
 
 import AppKit
+import ServiceManagement
 import SwiftUI
 
 struct ContentView: View {
@@ -16,6 +17,7 @@ struct ContentView: View {
   let profileStore: ProfileStore
 
   @Environment(\.openWindow) private var openWindow
+  @State private var loginItemStatus: SMAppService.Status = SMAppService.mainApp.status
 
   var body: some View {
     VStack(alignment: .leading, spacing: 14) {
@@ -107,6 +109,20 @@ struct ContentView: View {
         }
       }
 
+      Divider()
+
+      VStack(alignment: .leading, spacing: 4) {
+        Toggle("ログイン時に自動起動", isOn: launchAtLoginBinding)
+
+        if loginItemStatus == .requiresApproval {
+          Button("システム設定で承認する…") {
+            SMAppService.openSystemSettingsLoginItems()
+          }
+          .font(.caption)
+          .foregroundStyle(.orange)
+        }
+      }
+
       Button("TeleDeckを終了") {
         NSApplication.shared.terminate(nil)
       }
@@ -114,6 +130,30 @@ struct ContentView: View {
     }
     .padding(16)
     .frame(width: 280)
+  }
+
+  // MARK: - ログイン時の自動起動
+
+  /// requiresApproval（登録直後、システム設定でユーザーの承認待ちの状態）もONとして見せる。
+  /// OFFにした場合のみ実際にunregisterする
+  private var launchAtLoginBinding: Binding<Bool> {
+    Binding(
+      get: { loginItemStatus == .enabled || loginItemStatus == .requiresApproval },
+      set: { setLaunchAtLogin($0) }
+    )
+  }
+
+  private func setLaunchAtLogin(_ enabled: Bool) {
+    do {
+      if enabled {
+        try SMAppService.mainApp.register()
+      } else {
+        try SMAppService.mainApp.unregister()
+      }
+    } catch {
+      print("ログイン時自動起動の設定に失敗しました: \(error.localizedDescription)")
+    }
+    loginItemStatus = SMAppService.mainApp.status
   }
 }
 
