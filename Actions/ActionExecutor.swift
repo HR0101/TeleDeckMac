@@ -11,6 +11,8 @@ import Foundation
 
 final class ActionExecutor {
 
+  private let windowLayoutManager = WindowLayoutManager()
+
   enum ExecutionError: LocalizedError {
     case appNotFound(String)
     case invalidURL(String)
@@ -56,6 +58,13 @@ final class ActionExecutor {
       executeMultiAction(steps: action.steps ?? [], completion: completion)
     case .delay:
       wait(ms: action.ms ?? 0, completion: completion)
+    case .openFolder, .activateTab, .closeTab, .activateApplication:
+      // openFolderはiPad内部専用のため通常ここには来ない。
+      // activateTab/closeTab/activateApplicationはBonjourServerが専用処理へ直接振り分けるため、ここには来ない。
+      // 防御的に何もせず成功として扱う。
+      completion(.success(()))
+    case .windowLayout:
+      windowLayoutManager.apply(preset: action.preset ?? "", completion: completion)
     }
   }
 
@@ -257,6 +266,14 @@ final class ActionExecutor {
     "b": 11, "q": 12, "w": 13, "e": 14, "r": 15, "y": 16, "t": 17,
     "1": 18, "2": 19, "3": 20, "4": 21, "6": 22, "5": 23, "9": 25, "7": 26, "8": 28, "0": 29,
     "o": 31, "u": 32, "i": 34, "p": 35, "l": 37, "j": 38, "k": 40, "n": 45, "m": 46,
-    "return": 36, "tab": 48, "space": 49, "delete": 51, "escape": 53
+    "return": 36, "tab": 48, "space": 49, "delete": 51, "escape": 53,
+    // US配列キーボード画面（KeyboardView）向けに追加した記号・矢印・Caps Lock
+    "-": 27, "=": 24, "[": 33, "]": 30, "\\": 42,
+    ";": 41, "'": 39, ",": 43, ".": 47, "/": 44, "`": 50,
+    "left": 123, "right": 124, "down": 125, "up": 126,
+    "capslock": 57,
+    // JISキーボードの専用入力ソースキー。Commandキー設定に依存せず直接切り替える。
+    "eisu": 102,
+    "kana": 104
   ]
 }
