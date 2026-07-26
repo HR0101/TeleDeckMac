@@ -9,6 +9,25 @@
 
 import Foundation
 
+/// iPad/Macのボタン編集画面で共通利用するおすすめSF Symbols。
+enum EditorIconCatalog {
+  static let commonSFSymbols = [
+    "globe", "safari", "link", "star", "star.fill", "heart", "heart.fill", "bolt", "bolt.fill",
+    "folder", "folder.fill", "doc", "doc.text", "doc.on.doc", "doc.on.clipboard", "clipboard", "archivebox", "tray.full",
+    "message", "message.fill", "envelope", "envelope.fill", "phone", "phone.fill", "video", "video.fill", "bubble.left",
+    "music.note", "play.fill", "pause.fill", "stop.fill", "forward.fill", "backward.fill",
+    "speaker.wave.2", "speaker.slash", "mic", "mic.fill", "headphones", "camera", "camera.fill", "photo", "film", "tv",
+    "text.cursor", "textformat", "pencil", "highlighter",
+    "gearshape", "gearshape.fill", "wrench.and.screwdriver", "slider.horizontal.3", "power",
+    "arrow.clockwise", "arrow.triangle.2.circlepath", "square.grid.2x2", "square.grid.3x3", "list.bullet",
+    "flag", "flag.fill", "bookmark", "bookmark.fill", "tag", "bell", "bell.fill", "gift", "cart", "creditcard",
+    "desktopcomputer", "laptopcomputer", "ipad", "iphone", "printer", "keyboard", "macwindow",
+    "sun.max", "moon", "cloud", "clock", "timer", "hourglass",
+    "location", "map", "person", "person.2",
+    "xmark", "checkmark", "plus", "trash", "lock", "terminal"
+  ]
+}
+
 /// ボタンアイコンの種別（SF SymbolsかDocuments配下に保存した画像/GIFか）
 enum IconKind: String, Codable {
   case sfSymbol
@@ -30,7 +49,8 @@ struct ButtonConfig: Codable, Identifiable {
   /// iconKind == .imageのとき、iPadのDocuments/Icons/配下に保存された画像（GIFを含む）のファイル名。
   /// 画像バイナリ自体はMac・iPad間で同期しない
   var iconImageFileName: String?
-  /// launchAppアクションの対象アプリからMac側で取得した64px PNGアイコン
+  /// Mac側で取得したアイコンのPNGデータ。launchAppは対象アプリのアイコン（64px）、
+  /// openURLは対象サイトのfavicon（取得できた場合のみ）
   var applicationIconPNGData: Data?
 
   init(

@@ -26,6 +26,9 @@ final class BonjourServer {
   private let profileStore: ProfileStore
   private let clipboardHistoryStore = ClipboardHistoryStore()
   private var applicationIconCache: [String: Data] = [:]
+  /// ホスト名(favicon取得先)ごとのキャッシュ。取得失敗時は空のDataを入れて無限リトライを防ぐ
+  private var websiteIconCache: [String: Data] = [:]
+  private var pendingWebsiteIconFetches: Set<String> = []
 
   private static let serviceType = "_teledeck._tcp"
 
@@ -165,6 +168,8 @@ final class BonjourServer {
         handleGetTabs(on: connection)
       case "getApplications":
         handleGetApplications(on: connection)
+      case "pickFolder":
+        handlePickFolder(on: connection)
       case "updateProfiles":
         let request = try JSONDecoder().decode(UpdateProfilesMessage.self, from: data)
         profileStore.replaceAll(profiles: request.profiles, activeProfileId: request.activeProfileId)
@@ -262,6 +267,26 @@ final class BonjourServer {
     let applications = runningApplications()
     print("起動中アプリ一覧を送信: \(applications.count)件")
     send(ApplicationsListMessage(applications: applications), on: connection)
+  }
+
+  private func handlePickFolder(on connection: NWConnection) {
+    guard connectedDeviceName != nil else {
+      send(FolderSelectionMessage(path: nil), on: connection)
+      return
+    }
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      let panel = NSOpenPanel()
+      panel.title = "TeleDeckで開くフォルダーを選択"
+      panel.prompt = "選択"
+      panel.canChooseFiles = false
+      panel.canChooseDirectories = true
+      panel.allowsMultipleSelection = false
+      panel.begin { response in
+        let path = response == .OK ? panel.url?.path : nil
+        self.send(FolderSelectionMessage(path: path), on: connection)
+      }
+    }
   }
 
   private func runningApplications() -> [MacApplicationInfo] {
@@ -418,14 +443,63 @@ final class BonjourServer {
     for profileIndex in enrichedProfiles.indices {
       for buttonIndex in enrichedProfiles[profileIndex].buttons.indices {
         let action = enrichedProfiles[profileIndex].buttons[buttonIndex].action
-        guard action.type == .launchApp, let target = action.target, !target.isEmpty else {
+        switch action.type {
+        case .launchApp:
+          guard let target = action.target, !target.isEmpty else {
+            enrichedProfiles[profileIndex].buttons[buttonIndex].applicationIconPNGData = nil
+            continue
+          }
+          enrichedProfiles[profileIndex].buttons[buttonIndex].applicationIconPNGData = applicationIconData(for: target)
+        case .openURL:
+          guard let target = action.target, let host = faviconHost(for: target) else {
+            enrichedProfiles[profileIndex].buttons[buttonIndex].applicationIconPNGData = nil
+            continue
+          }
+          if let cached = websiteIconCache[host], !cached.isEmpty {
+            enrichedProfiles[profileIndex].buttons[buttonIndex].applicationIconPNGData = cached
+          } else {
+            enrichedProfiles[profileIndex].buttons[buttonIndex].applicationIconPNGData = nil
+            if websiteIconCache[host] == nil {
+              fetchWebsiteIcon(host: host)
+            }
+          }
+        default:
           enrichedProfiles[profileIndex].buttons[buttonIndex].applicationIconPNGData = nil
-          continue
         }
-        enrichedProfiles[profileIndex].buttons[buttonIndex].applicationIconPNGData = applicationIconData(for: target)
       }
     }
     return enrichedProfiles
+  }
+
+  /// "https://example.com/path" のようなURL文字列からfavicon取得用のホスト名を取り出す。
+  /// スキームが省略された入力（例: "example.com"）にも https:// を補って対応する
+  private func faviconHost(for target: String) -> String? {
+    if let host = URL(string: target)?.host {
+      return host
+    }
+    return URL(string: "https://\(target)")?.host
+  }
+
+  /// Googleのfaviconサービス経由でサイトのアイコンを取得し、キャッシュに保存後iPadへ再同期する。
+  /// 取得に失敗した場合も空のDataをキャッシュし、同期のたびに再取得を繰り返さないようにする
+  private func fetchWebsiteIcon(host: String) {
+    guard !pendingWebsiteIconFetches.contains(host) else { return }
+    pendingWebsiteIconFetches.insert(host)
+
+    guard let faviconURL = URL(string: "https://www.google.com/s2/favicons?sz=64&domain=\(host)") else {
+      pendingWebsiteIconFetches.remove(host)
+      return
+    }
+
+    URLSession.shared.dataTask(with: faviconURL) { [weak self] data, _, _ in
+      DispatchQueue.main.async {
+        guard let self else { return }
+        self.pendingWebsiteIconFetches.remove(host)
+        self.websiteIconCache[host] = data ?? Data()
+        guard let data, !data.isEmpty else { return }
+        self.broadcastProfileSync(profiles: self.profileStore.profiles, activeProfileId: self.profileStore.activeProfileId)
+      }
+    }.resume()
   }
 
   private func applicationIconData(for target: String) -> Data? {

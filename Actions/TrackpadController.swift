@@ -53,11 +53,28 @@ final class TrackpadController {
     event?.post(tap: .cghidEventTap)
   }
 
-  /// メインディスプレイの範囲内にクランプする（CGDisplayBoundsはCGEventと同じ左上原点の座標系のため、NSScreenは使わない）
+  /// 接続中の全ディスプレイの範囲内にクランプする
+  /// （CGDisplayBoundsはCGEventと同じ左上原点の座標系のため、NSScreenは使わない）
   private static func clamped(_ point: CGPoint) -> CGPoint {
-    let bounds = CGDisplayBounds(CGMainDisplayID())
+    let bounds = virtualDesktopBounds()
     let x = min(max(point.x, bounds.minX), bounds.maxX - 1)
     let y = min(max(point.y, bounds.minY), bounds.maxY - 1)
     return CGPoint(x: x, y: y)
+  }
+
+  /// 接続中の全ディスプレイのCGDisplayBoundsを合成した、仮想デスクトップ全体の矩形を返す。
+  /// メインディスプレイの範囲だけにクランプすると、拡張モニターへカーソルが移動できなくなるため
+  private static func virtualDesktopBounds() -> CGRect {
+    var displayCount: UInt32 = 0
+    guard CGGetActiveDisplayList(0, nil, &displayCount) == .success, displayCount > 0 else {
+      return CGDisplayBounds(CGMainDisplayID())
+    }
+
+    var displayIDs = [CGDirectDisplayID](repeating: 0, count: Int(displayCount))
+    guard CGGetActiveDisplayList(displayCount, &displayIDs, &displayCount) == .success else {
+      return CGDisplayBounds(CGMainDisplayID())
+    }
+
+    return displayIDs.reduce(CGRect.null) { $0.union(CGDisplayBounds($1)) }
   }
 }

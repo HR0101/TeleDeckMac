@@ -107,10 +107,28 @@ final class ProfileStore {
     notifyChange()
   }
 
+  /// ボタンを削除する。フォルダーボタンの場合、中の子ボタン（さらにその中の孫ボタン…）も
+  /// 再帰的に削除しないと、到達手段を失ったまま永久に残り続けてしまうため、まとめて削除する
   func deleteButton(id: UUID, fromProfile profileId: UUID) {
     guard let profileIndex = profiles.firstIndex(where: { $0.id == profileId }) else { return }
-    profiles[profileIndex].buttons.removeAll { $0.id == id }
+    let idsToDelete = Self.collectIdsToDelete(startingAt: id, in: profiles[profileIndex].buttons)
+    profiles[profileIndex].buttons.removeAll { idsToDelete.contains($0.id) }
     notifyChange()
+  }
+
+  /// 指定したidと、そのidをfolderIdとして持つ子ボタン・孫ボタン…を再帰的に集める
+  private static func collectIdsToDelete(startingAt id: UUID, in buttons: [ButtonConfig]) -> Set<UUID> {
+    var idsToDelete: Set<UUID> = [id]
+    var frontier: [UUID] = [id]
+    while !frontier.isEmpty {
+      let children = buttons.filter { button in
+        guard let folderId = button.folderId else { return false }
+        return frontier.contains(folderId)
+      }
+      frontier = children.map(\.id)
+      idsToDelete.formUnion(frontier)
+    }
+    return idsToDelete
   }
 
   private func notifyChange() {

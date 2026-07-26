@@ -41,22 +41,11 @@ final class WindowLayoutManager {
   private static let threeSplitMaxAppCount = 3
 
   func apply(preset: String, completion: @escaping (Result<Void, Error>) -> Void) {
-    guard let screenFrame = NSScreen.main?.visibleFrame else {
-      completion(.failure(LayoutError.noScreen))
-      return
-    }
-
     switch preset {
-    case "left-half":
-      applySingleWindowLayout(frame: Self.leftHalfFrame(in: screenFrame), completion: completion)
-    case "right-half":
-      applySingleWindowLayout(frame: Self.rightHalfFrame(in: screenFrame), completion: completion)
-    case "maximize":
-      applySingleWindowLayout(frame: screenFrame, completion: completion)
-    case "centered":
-      applySingleWindowLayout(frame: Self.centeredFrame(in: screenFrame), completion: completion)
+    case "left-half", "right-half", "maximize", "centered":
+      applySingleWindowLayout(preset: preset, completion: completion)
     case "three-split":
-      applyThreeSplitLayout(in: screenFrame, completion: completion)
+      applyThreeSplitLayout(completion: completion)
     default:
       completion(.failure(LayoutError.unknownPreset(preset)))
     }
@@ -64,7 +53,7 @@ final class WindowLayoutManager {
 
   // MARK: - 単一ウィンドウの配置（left-half / right-half / maximize / centered）
 
-  private func applySingleWindowLayout(frame: CGRect, completion: @escaping (Result<Void, Error>) -> Void) {
+  private func applySingleWindowLayout(preset: String, completion: @escaping (Result<Void, Error>) -> Void) {
     guard let frontmostApp = NSWorkspace.shared.frontmostApplication else {
       completion(.failure(LayoutError.noFrontmostApp))
       return
@@ -75,8 +64,31 @@ final class WindowLayoutManager {
       return
     }
 
+    // TeleDeckMac自身（メニューバー常駐アプリ）が乗っている画面ではなく、
+    // 実際に配置対象となるこのウィンドウが乗っている画面を基準にする
+    // （外部ディスプレイ環境でNSScreen.mainだけを使うと画面がずれるため）
+    guard let screenFrame = Self.screenFrame(containing: window) else {
+      completion(.failure(LayoutError.noScreen))
+      return
+    }
+
+    let targetFrame: CGRect
+    switch preset {
+    case "left-half":
+      targetFrame = Self.leftHalfFrame(in: screenFrame)
+    case "right-half":
+      targetFrame = Self.rightHalfFrame(in: screenFrame)
+    case "maximize":
+      targetFrame = screenFrame
+    case "centered":
+      targetFrame = Self.centeredFrame(in: screenFrame)
+    default:
+      completion(.failure(LayoutError.unknownPreset(preset)))
+      return
+    }
+
     do {
-      try Self.setFrame(frame, for: window)
+      try Self.setFrame(targetFrame, for: window)
       completion(.success(()))
     } catch {
       completion(.failure(error))
@@ -85,18 +97,27 @@ final class WindowLayoutManager {
 
   // MARK: - 3分割配置（three-split）
 
-  private func applyThreeSplitLayout(in screenFrame: CGRect, completion: @escaping (Result<Void, Error>) -> Void) {
+  private func applyThreeSplitLayout(completion: @escaping (Result<Void, Error>) -> Void) {
     let targetApps = Self.recentRegularApps(maxCount: Self.threeSplitMaxAppCount)
     guard !targetApps.isEmpty else {
       completion(.failure(LayoutError.noFrontmostApp))
       return
     }
 
-    let slices = Self.threeSplitFrames(in: screenFrame, count: targetApps.count)
+    let windows = targetApps.compactMap { Self.mainWindowElement(forPid: $0.processIdentifier) }
+    guard let firstWindow = windows.first else {
+      completion(.failure(LayoutError.noAccessibleWindow))
+      return
+    }
+    guard let screenFrame = Self.screenFrame(containing: firstWindow) else {
+      completion(.failure(LayoutError.noScreen))
+      return
+    }
+
+    let slices = Self.threeSplitFrames(in: screenFrame, count: windows.count)
     var successCount = 0
 
-    for (index, app) in targetApps.enumerated() {
-      guard let window = Self.mainWindowElement(forPid: app.processIdentifier) else { continue }
+    for (index, window) in windows.enumerated() {
       if (try? Self.setFrame(slices[index], for: window)) != nil {
         successCount += 1
       }
@@ -167,6 +188,41 @@ final class WindowLayoutManager {
     return ordered
   }
 
+  /// グローバルディスプレイ座標系（kAXPositionAttributeが基準とする座標系）の原点(0,0)を
+  /// 持つ「プライマリ画面（メニューバーが乗っている画面）」を返す。
+  /// NSScreen.screensの並び順はプライマリ画面が先頭に来るとは限らないため、
+  /// frame.originが.zeroの画面を明示的に探す必要がある
+  private static func primaryScreen() -> NSScreen? {
+    NSScreen.screens.first { $0.frame.origin == .zero }
+  }
+
+  /// 指定したウィンドウが実際に乗っている画面のvisibleFrame（Cocoa座標系）を返す。
+  /// TeleDeckMac自身の画面ではなく、配置対象ウィンドウの現在位置から画面を特定するため、
+  /// 外部ディスプレイ環境でもNSScreen.mainのズレの影響を受けない
+  private static func screenFrame(containing window: AXUIElement) -> CGRect? {
+    guard let primaryScreenHeight = Self.primaryScreen()?.frame.height else {
+      return NSScreen.main?.visibleFrame
+    }
+
+    var positionRef: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &positionRef) == .success,
+          let positionValue = positionRef,
+          CFGetTypeID(positionValue) == AXValueGetTypeID() else {
+      return NSScreen.main?.visibleFrame
+    }
+
+    var axPosition = CGPoint.zero
+    guard AXValueGetValue((positionValue as! AXValue), .cgPoint, &axPosition) else {
+      return NSScreen.main?.visibleFrame
+    }
+
+    // Accessibility APIの座標（画面左上原点・Y下向き）をNSScreen.frameのCocoa座標
+    // （画面左下原点・Y上向き）へ変換してから、突き合わせる画面を探す
+    let cocoaPosition = CGPoint(x: axPosition.x, y: primaryScreenHeight - axPosition.y)
+    let screen = NSScreen.screens.first { $0.frame.contains(cocoaPosition) } ?? NSScreen.main
+    return screen?.visibleFrame
+  }
+
   /// 指定pidのアプリのメインウィンドウ（フォーカス中のウィンドウ、無ければウィンドウ一覧の先頭）のAXUIElementを取得する
   private static func mainWindowElement(forPid pid: pid_t) -> AXUIElement? {
     let appElement = AXUIElementCreateApplication(pid)
@@ -189,10 +245,53 @@ final class WindowLayoutManager {
     return firstWindow
   }
 
-  /// AXUIElementのウィンドウへ位置・サイズを設定する
-  private static func setFrame(_ frame: CGRect, for window: AXUIElement) throws {
-    var origin = frame.origin
-    var size = frame.size
+  /// setFrame実行後、実際に反映されたフレームと目標フレームがこの誤差（pt）以内なら一致とみなす
+  private static let frameToleranceInPoints: CGFloat = 2.0
+
+  /// AXUIElementのウィンドウへ位置・サイズを設定する。
+  /// 引数frameはNSScreen由来のCocoa座標系（画面左下原点・Y上向き）だが、
+  /// kAXPositionAttributeが期待するのはグローバルディスプレイ座標系（プライマリ画面左上原点・Y下向き）のため、
+  /// ここで変換してから設定する（変換しないと、例えばmaximizeで画面下側にはみ出すなどの不具合になる）
+  ///
+  /// 一部のアプリはAXの実装上、位置とサイズを1回ずつ設定しただけでは狙った通りに反映されないことがある
+  /// （特に別画面へまたがる移動の場合、OSが移動前の現在サイズを基準に位置をクランプすることがある）。
+  /// そのため、Rectangle.appなど実績のあるウィンドウマネージャーと同様にサイズ→位置→サイズの順で設定し、
+  /// 反映結果を読み戻して目標とずれていれば1回だけ再適用する。
+  ///
+  /// なお、Terminal（文字セル単位でしかリサイズできない）や最大ウィンドウサイズを持つアプリのように、
+  /// 目標フレームちょうどには到達できないアプリは珍しくない。その場合でもAXの設定操作自体は成功しており、
+  /// ウィンドウは「そのアプリで可能な範囲で最大化・配置」されている。厳密一致しないだけで失敗として扱うと、
+  /// maximizeが常にエラーになるアプリが出てしまう（半分配置は届くのに最大化だけ画面幅に届かない等）。
+  /// そこで、AXの設定操作が成功していれば成功として報告し、目標に届かなかった場合は調査用にログのみ残す。
+  /// 権限不足などAX操作そのものが失敗するケースは、applyFrame側が例外を投げて従来どおり失敗として扱う。
+  private static func setFrame(_ cocoaFrame: CGRect, for window: AXUIElement) throws {
+    let axFrame = Self.accessibilityFrame(fromCocoa: cocoaFrame)
+
+    // 1回目の適用。AXの設定操作自体が失敗した場合のみ、applyFrameが例外を投げる。
+    try Self.applyFrame(axFrame, to: window)
+
+    // 目標に十分近ければ完了。ずれていれば別画面クランプ等の可能性があるため1回だけ再適用する。
+    if let appliedFrame = Self.currentAXFrame(of: window),
+       Self.isApproximatelyEqual(appliedFrame, axFrame, tolerance: frameToleranceInPoints) {
+      return
+    }
+
+    try Self.applyFrame(axFrame, to: window)
+
+    // 再適用後も目標に届かない場合は、対象アプリ側の制約（最大/最小サイズ・リサイズ増分など）が理由であり、
+    // AXの設定操作は成功している。ウィンドウは可能な範囲で配置済みのため成功として扱い、原因調査用のログのみ残す。
+    if let retriedFrame = Self.currentAXFrame(of: window),
+       !Self.isApproximatelyEqual(retriedFrame, axFrame, tolerance: frameToleranceInPoints) {
+      print("ウィンドウを目標フレームちょうどには配置できませんでした（アプリ側の制約の可能性）: 目標=\(axFrame) 実際=\(retriedFrame)")
+    }
+  }
+
+  /// axFrame（グローバルディスプレイ座標系）をウィンドウへ実際に適用する。
+  /// サイズ→位置→サイズの順で設定することで、別画面への移動時にOSが
+  /// 移動前の位置・サイズを基準にサイズをクランプしてしまう問題を回避する
+  private static func applyFrame(_ axFrame: CGRect, to window: AXUIElement) throws {
+    var origin = axFrame.origin
+    var size = axFrame.size
 
     guard let positionValue = AXValueCreate(.cgPoint, &origin) else {
       throw LayoutError.axOperationFailed("位置の値生成に失敗しました")
@@ -201,11 +300,58 @@ final class WindowLayoutManager {
       throw LayoutError.axOperationFailed("サイズの値生成に失敗しました")
     }
 
+    // 移動前の画面上でクランプされないよう、位置を設定する前に一度サイズを送っておく
+    // （この最初の呼び出しの成否は問わない。最終的な整合性は位置設定後の2回目のサイズ設定で担保する）
+    _ = AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sizeValue)
+
     let positionResult = AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, positionValue)
     let sizeResult = AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sizeValue)
 
     guard positionResult == .success, sizeResult == .success else {
       throw LayoutError.axOperationFailed("AXError position=\(positionResult.rawValue) size=\(sizeResult.rawValue)")
     }
+  }
+
+  /// ウィンドウの現在のkAXPositionAttribute/kAXSizeAttributeを読み取り、
+  /// グローバルディスプレイ座標系のCGRectとして返す（取得に失敗した場合はnil）
+  private static func currentAXFrame(of window: AXUIElement) -> CGRect? {
+    var positionRef: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &positionRef) == .success,
+          let positionValue = positionRef,
+          CFGetTypeID(positionValue) == AXValueGetTypeID() else {
+      return nil
+    }
+
+    var sizeRef: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &sizeRef) == .success,
+          let sizeValue = sizeRef,
+          CFGetTypeID(sizeValue) == AXValueGetTypeID() else {
+      return nil
+    }
+
+    var position = CGPoint.zero
+    var size = CGSize.zero
+    guard AXValueGetValue((positionValue as! AXValue), .cgPoint, &position),
+          AXValueGetValue((sizeValue as! AXValue), .cgSize, &size) else {
+      return nil
+    }
+
+    return CGRect(origin: position, size: size)
+  }
+
+  /// 2つのCGRectが、各成分について許容誤差(tolerance)以内で一致しているかを判定する
+  private static func isApproximatelyEqual(_ lhs: CGRect, _ rhs: CGRect, tolerance: CGFloat) -> Bool {
+    abs(lhs.origin.x - rhs.origin.x) <= tolerance &&
+      abs(lhs.origin.y - rhs.origin.y) <= tolerance &&
+      abs(lhs.size.width - rhs.size.width) <= tolerance &&
+      abs(lhs.size.height - rhs.size.height) <= tolerance
+  }
+
+  /// Cocoa座標系（画面左下原点・Y上向き）のフレームを、Accessibility APIが期待する
+  /// グローバルディスプレイ座標系（プライマリ画面左上原点・Y下向き）のフレームへ変換する
+  private static func accessibilityFrame(fromCocoa cocoaFrame: CGRect) -> CGRect {
+    guard let primaryScreenHeight = Self.primaryScreen()?.frame.height else { return cocoaFrame }
+    let axY = primaryScreenHeight - cocoaFrame.origin.y - cocoaFrame.height
+    return CGRect(x: cocoaFrame.origin.x, y: axY, width: cocoaFrame.width, height: cocoaFrame.height)
   }
 }

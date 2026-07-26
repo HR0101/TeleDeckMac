@@ -61,7 +61,8 @@ struct ActionPayload: Codable {
   /// windowLayout: プリセット名（"left-half" / "right-half" / "maximize" / "centered" / "three-split"）
   var preset: String?
   /// mediaKey: 送信するキー（"volumeUp" / "volumeDown" / "mute" / "brightnessUp" / "brightnessDown" /
-  /// "playPause" / "nextTrack" / "previousTrack" / "keyboardBacklightUp" / "keyboardBacklightDown"）
+  /// "playPause" / "nextTrack" / "previousTrack" / "keyboardBacklightUp" / "keyboardBacklightDown" /
+  /// "micMute"）
   var mediaKey: String?
   /// systemAction: 実行する操作（"sleep" / "lockScreen" / "screenSaver" / "screenshotFull" / "screenshotSelection"）
   var systemAction: String?
@@ -99,6 +100,26 @@ struct PairResultMessage: Codable {
   var errorMessage: String?
 }
 
+/// QRコードで受け渡すペアリング情報。
+/// Macがこの内容をJSON化してQRコードとして表示し、iPadがカメラで読み取って復号する。
+/// カメラで無関係なQRを読み取ってしまってもTeleDeckのものか判別できるよう、固定マーカー`app`とバージョン`v`を持つ。
+struct PairingQRPayload: Codable {
+  /// TeleDeckのペアリングQRであることを示す固定マーカー
+  var app: String = "teledeck"
+  /// フォーマットのバージョン（将来QRの内容を拡張したときの互換判定用）
+  var v: Int = 1
+  /// Mac側に表示されている6桁PIN
+  let pin: String
+  /// 表示・識別用のMac名（Bonjourのサービスインスタンス名＝Host.current().localizedName）。
+  /// 現状のペアリングはBonjour探索に任せるため必須ではないが、複数Mac環境や将来の拡張に備えて含める
+  var name: String?
+
+  /// TeleDeckのペアリングQRとして妥当か（マーカー一致かつPINが6桁の数字）を判定する
+  var isValid: Bool {
+    app == "teledeck" && pin.count == 6 && pin.allSatisfy(\.isNumber)
+  }
+}
+
 /// Mac → iPad: 現在のプロファイル一覧の同期。Macがプロファイル設定の本体（source of truth）のため、
 /// ペアリング直後・Mac側での編集時・フォアグラウンドアプリ切替による自動切替時に送信される
 struct ProfileSyncMessage: Codable {
@@ -123,6 +144,17 @@ struct GetTabsMessage: Codable {
 /// iPad → Mac: 起動中のアプリケーション一覧の取得要求
 struct GetApplicationsMessage: Codable {
   var type: String = "getApplications"
+}
+
+/// iPad → Mac: Finderのフォルダー選択パネルを開く要求
+struct PickFolderMessage: Codable {
+  var type: String = "pickFolder"
+}
+
+/// Mac → iPad: Finderで選択されたフォルダー（キャンセル時はpath=nil）
+struct FolderSelectionMessage: Codable {
+  var type: String = "folderSelection"
+  let path: String?
 }
 
 /// Mac上で起動中のユーザー向けアプリケーションの情報

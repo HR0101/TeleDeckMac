@@ -6,6 +6,7 @@
 //
 
 import AppKit
+import CoreAudio
 import CoreGraphics
 import Foundation
 
@@ -169,28 +170,30 @@ final class ActionExecutor {
     }
 
     var flags: CGEventFlags = []
-    var keyCode: CGKeyCode?
+    var keyCodes: [CGKeyCode] = []
 
     for key in keys {
       let lowerKey = key.lowercased()
       if let modifier = Self.modifierFlags[lowerKey] {
         flags.insert(modifier)
       } else if let code = Self.keyCodes[lowerKey] {
-        keyCode = code
+        if !keyCodes.contains(code) {
+          keyCodes.append(code)
+        }
       } else {
         completion(.failure(ExecutionError.unknownKey(key)))
         return
       }
     }
 
-    guard let resolvedKeyCode = keyCode else {
+    guard !keyCodes.isEmpty else {
       completion(.failure(ExecutionError.unknownKey(keys.joined(separator: "+"))))
       return
     }
 
     // 矢印キー（123〜126）は、Mission Controlなどのシステムショートカットを正常に発火させるため
     // 特殊キーとしてのフラグを付与する必要がある
-    if [123, 124, 125, 126].contains(resolvedKeyCode) {
+    if keyCodes.contains(where: { [123, 124, 125, 126].contains($0) }) {
       flags.insert(.maskSecondaryFn)
       flags.insert(.maskNumericPad)
     }
@@ -200,13 +203,16 @@ final class ActionExecutor {
       return
     }
 
-    let keyDown = CGEvent(keyboardEventSource: source, virtualKey: resolvedKeyCode, keyDown: true)
-    keyDown?.flags = flags
-    keyDown?.post(tap: .cghidEventTap)
-
-    let keyUp = CGEvent(keyboardEventSource: source, virtualKey: resolvedKeyCode, keyDown: false)
-    keyUp?.flags = flags
-    keyUp?.post(tap: .cghidEventTap)
+    for keyCode in keyCodes {
+      let keyDown = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true)
+      keyDown?.flags = flags
+      keyDown?.post(tap: .cghidEventTap)
+    }
+    for keyCode in keyCodes.reversed() {
+      let keyUp = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false)
+      keyUp?.flags = flags
+      keyUp?.post(tap: .cghidEventTap)
+    }
 
     completion(.success(()))
   }
@@ -289,12 +295,154 @@ final class ActionExecutor {
   ]
 
   private func sendMediaKey(_ key: String?, completion: @escaping (Result<Void, Error>) -> Void) {
-    guard let key, let keyCode = Self.mediaKeyCodes[key] else {
-      completion(.failure(ExecutionError.unknownKey(key ?? "(未指定)")))
+    guard let key else {
+      completion(.failure(ExecutionError.unknownKey("(未指定)")))
+      return
+    }
+    // マイクミュートはCGEvent/Auxキーではなく、Core Audio経由で入力デバイス自体をミュートする
+    // （個別アプリのミュートではなく、システム全体のマイク入力を止めるため）
+    if key == "micMute" {
+      toggleMicrophoneMute(completion: completion)
+      return
+    }
+    guard let keyCode = Self.mediaKeyCodes[key] else {
+      completion(.failure(ExecutionError.unknownKey(key)))
       return
     }
     Self.postAuxKey(keyCode)
     completion(.success(()))
+  }
+
+  // MARK: - マイクミュート（Core Audio）
+
+  /// システムのデフォルト入力デバイスをミュート/解除する。
+  /// デバイスがkAudioDevicePropertyMuteに対応していない場合は、入力音量を0にする方式へフォールバックする
+  private func toggleMicrophoneMute(completion: @escaping (Result<Void, Error>) -> Void) {
+    guard let deviceID = Self.defaultInputDeviceID() else {
+      completion(.failure(ExecutionError.unknownKey("入力デバイスが見つかりません")))
+      return
+    }
+
+    var muteAddress = AudioObjectPropertyAddress(
+      mSelector: kAudioDevicePropertyMute,
+      mScope: kAudioDevicePropertyScopeInput,
+      mElement: kAudioObjectPropertyElementMain
+    )
+
+    guard AudioObjectHasProperty(deviceID, &muteAddress) else {
+      toggleMicrophoneVolumeFallback(deviceID: deviceID, completion: completion)
+      return
+    }
+
+    var isMuted: UInt32 = 0
+    var size = UInt32(MemoryLayout<UInt32>.size)
+    let getStatus = AudioObjectGetPropertyData(deviceID, &muteAddress, 0, nil, &size, &isMuted)
+    guard getStatus == noErr else {
+      completion(.failure(ExecutionError.unknownKey("マイクの状態取得に失敗しました（\(getStatus)）")))
+      return
+    }
+
+    var newValue: UInt32 = isMuted == 0 ? 1 : 0
+    let setStatus = AudioObjectSetPropertyData(deviceID, &muteAddress, 0, nil, size, &newValue)
+    guard setStatus == noErr else {
+      completion(.failure(ExecutionError.unknownKey("マイクのミュート切り替えに失敗しました（\(setStatus)）")))
+      return
+    }
+    completion(.success(()))
+  }
+
+  /// kAudioDevicePropertyMuteに対応していない入力デバイス向けのフォールバック。
+  /// 入力音量を0にすることでミュート相当の状態にし、解除時は直前の音量へ戻す。
+  /// 直前の音量はAudioDeviceID（再接続やMacエージェント再起動で変わりうる）ではなく、
+  /// デバイス固有で不変のUID文字列をキーにUserDefaultsへ永続化し、失われないようにする
+  private func toggleMicrophoneVolumeFallback(deviceID: AudioDeviceID, completion: @escaping (Result<Void, Error>) -> Void) {
+    var volumeAddress = AudioObjectPropertyAddress(
+      mSelector: kAudioDevicePropertyVolumeScalar,
+      mScope: kAudioDevicePropertyScopeInput,
+      mElement: kAudioObjectPropertyElementMain
+    )
+
+    guard AudioObjectHasProperty(deviceID, &volumeAddress) else {
+      completion(.failure(ExecutionError.unknownKey("このマイクはミュート操作に対応していません")))
+      return
+    }
+
+    var currentVolume: Float32 = 0
+    var size = UInt32(MemoryLayout<Float32>.size)
+    let getStatus = AudioObjectGetPropertyData(deviceID, &volumeAddress, 0, nil, &size, &currentVolume)
+    guard getStatus == noErr else {
+      completion(.failure(ExecutionError.unknownKey("マイクの音量取得に失敗しました（\(getStatus)）")))
+      return
+    }
+
+    let deviceUID = Self.deviceUID(for: deviceID)
+    var newVolume: Float32
+    if currentVolume > 0 {
+      if let deviceUID {
+        Self.savePreviousInputVolume(currentVolume, forDeviceUID: deviceUID)
+      }
+      newVolume = 0
+    } else {
+      newVolume = deviceUID.flatMap { Self.loadPreviousInputVolume(forDeviceUID: $0) } ?? 0.75
+    }
+
+    let setStatus = AudioObjectSetPropertyData(deviceID, &volumeAddress, 0, nil, size, &newVolume)
+    guard setStatus == noErr else {
+      completion(.failure(ExecutionError.unknownKey("マイクのミュート切り替えに失敗しました（\(setStatus)）")))
+      return
+    }
+    completion(.success(()))
+  }
+
+  private static let previousInputVolumeDefaultsKey = "ActionExecutor.previousInputVolumeBeforeMute"
+
+  private static func savePreviousInputVolume(_ volume: Float32, forDeviceUID deviceUID: String) {
+    var stored = UserDefaults.standard.dictionary(forKey: previousInputVolumeDefaultsKey) as? [String: Double] ?? [:]
+    stored[deviceUID] = Double(volume)
+    UserDefaults.standard.set(stored, forKey: previousInputVolumeDefaultsKey)
+  }
+
+  private static func loadPreviousInputVolume(forDeviceUID deviceUID: String) -> Float32? {
+    let stored = UserDefaults.standard.dictionary(forKey: previousInputVolumeDefaultsKey) as? [String: Double]
+    return stored?[deviceUID].map { Float32($0) }
+  }
+
+  /// デバイス固有で再接続後も変わらないUID文字列を取得する（AudioDeviceIDは再接続や再起動で変わりうるため、
+  /// 永続化のキーにはこちらを使う）
+  private static func deviceUID(for deviceID: AudioDeviceID) -> String? {
+    var address = AudioObjectPropertyAddress(
+      mSelector: kAudioDevicePropertyDeviceUID,
+      mScope: kAudioObjectPropertyScopeGlobal,
+      mElement: kAudioObjectPropertyElementMain
+    )
+    var uid: CFString?
+    var size = UInt32(MemoryLayout<CFString?>.size)
+    let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &uid)
+    guard status == noErr else { return nil }
+    return uid as String?
+  }
+
+  /// システムのデフォルト入力デバイスのIDを取得する
+  private static func defaultInputDeviceID() -> AudioDeviceID? {
+    var deviceID = AudioDeviceID(kAudioObjectUnknown)
+    var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+    var address = AudioObjectPropertyAddress(
+      mSelector: kAudioHardwarePropertyDefaultInputDevice,
+      mScope: kAudioObjectPropertyScopeGlobal,
+      mElement: kAudioObjectPropertyElementMain
+    )
+
+    let status = AudioObjectGetPropertyData(
+      AudioObjectID(kAudioObjectSystemObject),
+      &address,
+      0,
+      nil,
+      &size,
+      &deviceID
+    )
+
+    guard status == noErr, deviceID != kAudioObjectUnknown else { return nil }
+    return deviceID
   }
 
   private static func postAuxKey(_ key: Int32) {
