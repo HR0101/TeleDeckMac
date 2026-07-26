@@ -272,11 +272,15 @@ private struct ProfileDetailView: View {
   @State private var editingButton: ButtonConfig?
   @State private var newButtonPosition: GridPosition?
   @State private var hoveredButtonId: UUID?
+  @State private var hoveredEmptyCellId: String?
   @State private var buttonPendingDeletion: ButtonConfig?
   @State private var dropErrorMessage: String?
 
   private var columns: [GridItem] {
-    Array(repeating: GridItem(.flexible()), count: profile.gridColumns)
+    Array(
+      repeating: GridItem(.flexible(minimum: 64, maximum: 112), spacing: 12),
+      count: profile.gridColumns
+    )
   }
 
   private var profile: ProfileConfig {
@@ -761,64 +765,66 @@ private struct ProfileDetailView: View {
   }
 
   private func buttonCell(_ button: ButtonConfig) -> some View {
-    ZStack(alignment: .topTrailing) {
-      Button {
-        if button.action.type == .openFolder {
-          folderStack.append(button.id)
-        } else {
-          editingButton = button
-        }
-      } label: {
-        VStack(spacing: 6) {
-          iconView(for: button)
-            .font(.system(size: 22))
-            .foregroundStyle(GamingPalette.foreground)
-            .frame(width: 28, height: 28)
-          Text(button.label)
-            .font(.caption.weight(.medium))
-            .lineLimit(1)
-            .foregroundStyle(GamingPalette.foreground)
-        }
-        .frame(maxWidth: .infinity)
-        .aspectRatio(1, contentMode: .fit)
-        .padding(8)
-        .macStreamDeckGlassTile(isHovered: hoveredButtonId == button.id)
-        .overlay(alignment: .bottomTrailing) {
+    GeometryReader { proxy in
+      ZStack(alignment: .topTrailing) {
+        Button {
           if button.action.type == .openFolder {
-            Image(systemName: "chevron.right.circle.fill")
-              .foregroundStyle(GamingPalette.accent)
-              .padding(7)
-          }
-        }
-      }
-      .buttonStyle(.plain)
-      .draggable(button.id.uuidString)
-
-      if hoveredButtonId == button.id {
-        HStack(spacing: 5) {
-          Button {
+            folderStack.append(button.id)
+          } else {
             editingButton = button
-          } label: {
-            Image(systemName: "pencil.circle.fill")
-              .foregroundStyle(GamingPalette.accent)
           }
-          .help("ボタンを編集")
-
-          Button {
-            buttonPendingDeletion = button
-          } label: {
-            Image(systemName: "trash.circle.fill")
-              .foregroundStyle(GamingPalette.destructive)
+        } label: {
+          VStack(spacing: 6) {
+            iconView(for: button)
+              .font(.system(size: 22))
+              .foregroundStyle(GamingPalette.foreground)
+              .frame(width: 28, height: 28)
+            Text(button.label)
+              .font(.caption.weight(.medium))
+              .lineLimit(1)
+              .foregroundStyle(GamingPalette.foreground)
           }
-          .help("ボタンを削除")
+          .padding(8)
+          .frame(width: proxy.size.width, height: proxy.size.height)
+          .macStreamDeckGlassTile(isHovered: hoveredButtonId == button.id)
+          .overlay(alignment: .bottomTrailing) {
+            if button.action.type == .openFolder {
+              Image(systemName: "chevron.right.circle.fill")
+                .foregroundStyle(GamingPalette.accent)
+                .padding(7)
+            }
+          }
         }
-        .buttonStyle(.plain)
-        .padding(6)
+        .buttonStyle(MacPanelGridButtonStyle())
+        .draggable(button.id.uuidString)
+
+        if hoveredButtonId == button.id {
+          HStack(spacing: 5) {
+            Button {
+              editingButton = button
+            } label: {
+              Image(systemName: "pencil.circle.fill")
+                .foregroundStyle(GamingPalette.accent)
+            }
+            .help("ボタンを編集")
+
+            Button {
+              buttonPendingDeletion = button
+            } label: {
+              Image(systemName: "trash.circle.fill")
+                .foregroundStyle(GamingPalette.destructive)
+            }
+            .help("ボタンを削除")
+          }
+          .buttonStyle(.plain)
+          .padding(6)
+        }
+      }
+      .onHover { hovering in
+        hoveredButtonId = hovering ? button.id : nil
       }
     }
-    .onHover { hovering in
-      hoveredButtonId = hovering ? button.id : nil
-    }
+    .aspectRatio(1, contentMode: .fit)
   }
 
   @ViewBuilder
@@ -860,17 +866,44 @@ private struct ProfileDetailView: View {
   }
 
   private func addCell(row: Int, col: Int) -> some View {
-    Button {
-      newButtonPosition = GridPosition(row: row, col: col)
-    } label: {
-      Image(systemName: "plus")
-        .font(.system(size: 18))
-        .foregroundStyle(GamingPalette.accent.opacity(0.75))
-        .frame(maxWidth: .infinity)
-        .aspectRatio(1, contentMode: .fit)
-        .macStreamDeckGlassTile(isHovered: false, isEmpty: true)
+    let cellId = "\(row)-\(col)"
+
+    return GeometryReader { proxy in
+      Button {
+        newButtonPosition = GridPosition(row: row, col: col)
+      } label: {
+        VStack(spacing: 7) {
+          ZStack {
+            Circle()
+              .fill(GamingPalette.accent.opacity(0.16))
+            Image(systemName: "plus")
+              .font(.system(size: 20, weight: .semibold))
+              .foregroundStyle(GamingPalette.accent)
+          }
+          .frame(width: 36, height: 36)
+
+          Text("アクションを追加")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(GamingPalette.mutedForeground)
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
+        }
+        .padding(8)
+        .frame(width: proxy.size.width, height: proxy.size.height)
+        .macStreamDeckGlassTile(
+          isHovered: hoveredEmptyCellId == cellId,
+          isEmpty: true
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+      }
+      .buttonStyle(MacPanelGridButtonStyle())
+      .onHover { hovering in
+        hoveredEmptyCellId = hovering ? cellId : nil
+      }
+      .help("この位置にアクションを追加")
     }
-    .buttonStyle(.plain)
+    .aspectRatio(1, contentMode: .fit)
+    .accessibilityLabel("アクションを追加")
   }
 }
 
@@ -936,6 +969,15 @@ private struct ProfileSidebarButtonStyle: ButtonStyle {
     configuration.label
       .scaleEffect(configuration.isPressed ? 0.985 : 1)
       .opacity(configuration.isPressed ? 0.88 : 1)
+      .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+  }
+}
+
+private struct MacPanelGridButtonStyle: ButtonStyle {
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .scaleEffect(configuration.isPressed ? 0.97 : 1)
+      .opacity(configuration.isPressed ? 0.86 : 1)
       .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
   }
 }
