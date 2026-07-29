@@ -16,10 +16,14 @@ struct ContentView: View {
   let pairingManager: PairingManager
   let server: BonjourServer
   let profileStore: ProfileStore
+  let permissionMonitor: PermissionMonitor
 
   @Environment(\.openWindow) private var openWindow
   @State private var loginItemStatus: SMAppService.Status = SMAppService.mainApp.status
   @State private var isShowingRevokeConfirmation = false
+  /// PINとQRを表示するかどうか。画面共有中に不用意に映り込まないよう、
+  /// ペアリング済みのときは既定で隠し、必要なときだけ開く
+  @State private var isShowingPairingCredentials = false
 
   var body: some View {
     ZStack {
@@ -29,8 +33,10 @@ struct ContentView: View {
 
       VStack(alignment: .leading, spacing: 14) {
         header
+        permissionSection
         profileSection
         editPanelButton
+        lastExecutionSection
         sectionDivider
         pairingSection
         sectionDivider
@@ -40,6 +46,10 @@ struct ContentView: View {
       .frame(width: 300)
     }
     .frame(width: 300)
+    // ポップオーバーを開いた時点の状態を必ず反映させる（ポーリングの間隔を待たない）
+    .onAppear {
+      permissionMonitor.refresh()
+    }
     .confirmationDialog(
       "ペアリングを解除しますか？",
       isPresented: $isShowingRevokeConfirmation,
@@ -95,13 +105,73 @@ struct ContentView: View {
   }
 
   private var statusColor: Color {
+    guard permissionMonitor.isAccessibilityTrusted else { return GamingPalette.warning }
     guard server.isRunning else { return GamingPalette.destructive }
     return server.connectedDeviceName != nil ? GamingPalette.success : GamingPalette.accent
   }
 
+  /// iPadと接続できていても、権限が無ければ操作はMacへ届かない。
+  /// 「接続済み」と表示してしまうと動かない理由が隠れるため、権限の状態を優先して示す
   private var statusText: String {
+    guard permissionMonitor.isAccessibilityTrusted else { return "権限が必要" }
     guard server.isRunning else { return "停止中" }
     return server.connectedDeviceName != nil ? "接続済み" : "接続待機中"
+  }
+
+  // MARK: - アクセシビリティ権限
+
+  /// 許可済みのときは確認用の一行に留め、未許可のときだけ対処を促すカードを出す
+  @ViewBuilder
+  private var permissionSection: some View {
+    if permissionMonitor.isAccessibilityTrusted {
+      Label("操作の権限: 許可済み", systemImage: "checkmark.shield")
+        .font(.caption)
+        .foregroundStyle(GamingPalette.mutedForeground)
+    } else {
+      accessibilityWarningCard
+    }
+  }
+
+  private var accessibilityWarningCard: some View {
+    VStack(alignment: .leading, spacing: 9) {
+      Label("アクセシビリティの権限が必要です", systemImage: "exclamationmark.triangle.fill")
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(GamingPalette.warning)
+
+      Text("許可するまで、キー送信・文字入力・ウィンドウ配置・トラックパッドは動作しません。")
+        .font(.caption2)
+        .foregroundStyle(GamingPalette.mutedForeground)
+        .fixedSize(horizontal: false, vertical: true)
+
+      HStack(spacing: 8) {
+        Button("許可する") {
+          permissionMonitor.requestAccess()
+        }
+        .buttonStyle(GamingButtonStyle(isProminent: true))
+
+        Button("システム設定") {
+          PermissionMonitor.openAccessibilitySettings()
+        }
+        .buttonStyle(GamingButtonStyle())
+      }
+      .font(.caption)
+
+      // 一度拒否するとmacOSは「許可する」のダイアログを出さなくなるため、その場合の導線を明示する
+      Text("ダイアログが出ない場合は「システム設定」から手動で有効にしてください。")
+        .font(.caption2)
+        .foregroundStyle(GamingPalette.mutedForeground)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+    .padding(11)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(
+      RoundedRectangle(cornerRadius: 11, style: .continuous)
+        .fill(GamingPalette.warning.opacity(0.12))
+    )
+    .overlay(
+      RoundedRectangle(cornerRadius: 11, style: .continuous)
+        .stroke(GamingPalette.warning.opacity(0.45), lineWidth: 1)
+    )
   }
 
   // MARK: - プロファイル選択
@@ -130,7 +200,8 @@ struct ContentView: View {
         } label: {
           Label("新規プロファイルを作成…", systemImage: "plus.circle")
         }
-        Label("新規作成・編集はMacで管理", systemImage: "desktopcomputer")
+        // 「新規作成・編集はMacで管理」という説明ラベルは、真上の作成ボタンと役割が重なるうえ
+        // メニュー項目として並ぶと押せそうに見えるため置かない
       } label: {
         HStack(spacing: 10) {
           Image(systemName: "square.grid.3x3.fill")
@@ -163,6 +234,16 @@ struct ContentView: View {
 
   // MARK: - ペアリング
 
+  /// ペアリング済みかどうか。済んでいればPIN・QRは通常不要なため隠しておく
+  private var isPaired: Bool {
+    pairingManager.trustedDeviceName != nil
+  }
+
+  /// PIN・QRを実際に表示するか。未ペアリング時は接続に必須のため常に開く
+  private var showsPairingCredentials: Bool {
+    !isPaired || isShowingPairingCredentials
+  }
+
   private var pairingSection: some View {
     VStack(alignment: .leading, spacing: 12) {
       HStack {
@@ -170,14 +251,40 @@ struct ContentView: View {
           Text("ペアリングPIN")
             .font(.caption)
             .foregroundStyle(GamingPalette.mutedForeground)
-          Text(pairingManager.currentPIN)
-            .font(.system(.title, design: .monospaced, weight: .bold))
-            .foregroundStyle(GamingPalette.foreground)
-            .kerning(3)
+
+          if showsPairingCredentials {
+            Text(pairingManager.currentPIN)
+              .font(.system(.title, design: .monospaced, weight: .bold))
+              .foregroundStyle(GamingPalette.foreground)
+              .kerning(3)
+          } else {
+            // 画面共有中にメニューを開いてもPINが映らないよう伏せ字にする
+            Text("••••••")
+              .font(.system(.title, design: .monospaced, weight: .bold))
+              .foregroundStyle(GamingPalette.mutedForeground)
+              .kerning(3)
+          }
         }
+
         Spacer()
+
+        if isPaired {
+          Button {
+            isShowingPairingCredentials.toggle()
+          } label: {
+            Image(systemName: isShowingPairingCredentials ? "eye.slash" : "eye")
+              .foregroundStyle(GamingPalette.accent)
+              .padding(9)
+              .gamingCard(cornerRadius: 9)
+          }
+          .buttonStyle(.plain)
+          .help(isShowingPairingCredentials ? "PINを隠す" : "PINを表示")
+        }
+
         Button {
           pairingManager.regeneratePIN()
+          // 再発行した意味が伝わるよう、隠れている場合は自動的に開く
+          isShowingPairingCredentials = true
         } label: {
           Image(systemName: "arrow.clockwise")
             .foregroundStyle(GamingPalette.accent)
@@ -188,19 +295,26 @@ struct ContentView: View {
         .help("PINを再発行")
       }
 
-      Text("iPadのペアリング画面で、この6桁PINを入力してください。")
-        .font(.caption)
-        .foregroundStyle(GamingPalette.mutedForeground)
-        .fixedSize(horizontal: false, vertical: true)
+      if showsPairingCredentials {
+        Text("iPadのペアリング画面で、この6桁PINを入力してください。")
+          .font(.caption)
+          .foregroundStyle(GamingPalette.mutedForeground)
+          .fixedSize(horizontal: false, vertical: true)
 
-      PairingQRCodeView(pin: pairingManager.currentPIN, deviceName: Host.current().localizedName)
+        PairingQRCodeView(pin: pairingManager.currentPIN, deviceName: Host.current().localizedName)
 
-      Text("または、iPadの「QRで接続」からこのQRコードを読み取ってください。")
-        .font(.caption)
-        .foregroundStyle(GamingPalette.mutedForeground)
-        .fixedSize(horizontal: false, vertical: true)
+        Text("または、iPadの「QRで接続」からこのQRコードを読み取ってください。")
+          .font(.caption)
+          .foregroundStyle(GamingPalette.mutedForeground)
+          .fixedSize(horizontal: false, vertical: true)
+      } else {
+        Text("ペアリング済みです。新しいiPadを接続するときだけ、目のアイコンでPINを表示してください。")
+          .font(.caption)
+          .foregroundStyle(GamingPalette.mutedForeground)
+          .fixedSize(horizontal: false, vertical: true)
+      }
 
-      if pairingManager.trustedDeviceName != nil {
+      if isPaired {
         Button {
           isShowingRevokeConfirmation = true
         } label: {
@@ -210,6 +324,38 @@ struct ContentView: View {
         }
         .buttonStyle(.plain)
       }
+    }
+  }
+
+  // MARK: - 直近の実行結果
+
+  /// 失敗がどこにも残らないと原因を追えないため、最後に実行したアクションの結果を1行で示す
+  @ViewBuilder
+  private var lastExecutionSection: some View {
+    if let log = server.lastExecutionLog {
+      HStack(spacing: 8) {
+        Image(systemName: log.succeeded ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+          .font(.caption)
+          .foregroundStyle(log.succeeded ? GamingPalette.success : GamingPalette.destructive)
+
+        Text(log.summary)
+          .font(.caption)
+          .foregroundStyle(GamingPalette.mutedForeground)
+          .lineLimit(2)
+          .fixedSize(horizontal: false, vertical: true)
+
+        Spacer(minLength: 0)
+
+        Text(log.timestamp, style: .time)
+          .font(.caption2.monospacedDigit())
+          .foregroundStyle(GamingPalette.mutedForeground)
+      }
+      .padding(9)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .background(
+        RoundedRectangle(cornerRadius: 9, style: .continuous)
+          .fill(GamingPalette.muted.opacity(0.45))
+      )
     }
   }
 
@@ -229,7 +375,7 @@ struct ContentView: View {
           SMAppService.openSystemSettingsLoginItems()
         }
         .font(.caption)
-        .foregroundStyle(.orange)
+        .foregroundStyle(GamingPalette.warning)
         .buttonStyle(.plain)
       }
 
@@ -321,6 +467,7 @@ private struct PairingQRCodeView: View {
   ContentView(
     pairingManager: previewPairingManager,
     server: BonjourServer(pairingManager: previewPairingManager, actionExecutor: ActionExecutor(), profileStore: previewProfileStore),
-    profileStore: previewProfileStore
+    profileStore: previewProfileStore,
+    permissionMonitor: PermissionMonitor()
   )
 }
