@@ -15,6 +15,45 @@ final class BonjourServer {
   private(set) var isRunning = false
   private(set) var connectedDeviceName: String?
 
+  /// 直近に実行したアクションの結果。失敗の記録がどこにも残らないと
+  /// 「押したのに動かない」原因をMac側から追えないため、メニューバーへ出せるよう保持する
+  private(set) var lastExecutionLog: ExecutionLogEntry?
+
+  struct ExecutionLogEntry {
+    let actionType: ActionType
+    let succeeded: Bool
+    let errorMessage: String?
+    let timestamp: Date
+
+    /// メニューバーに1行で表示するための説明
+    var summary: String {
+      let name = Self.displayName(for: actionType)
+      guard !succeeded else { return "\(name)を実行しました" }
+      return "\(name): \(errorMessage ?? "失敗しました")"
+    }
+
+    private static func displayName(for type: ActionType) -> String {
+      switch type {
+      case .launchApp: return "アプリを起動"
+      case .openURL: return "URLを開く"
+      case .hotkey: return "ショートカット"
+      case .typeText: return "文字入力"
+      case .setVolume: return "音量変更"
+      case .multiAction: return "マルチアクション"
+      case .delay: return "待機"
+      case .openFolder: return "フォルダーを開く"
+      case .activateTab: return "タブを切り替え"
+      case .closeTab: return "タブを閉じる"
+      case .activateApplication: return "アプリを切り替え"
+      case .windowLayout: return "ウィンドウ配置"
+      case .mediaKey: return "メディアキー"
+      case .quitApplication: return "アプリを終了"
+      case .openFinderFolder: return "Finderで開く"
+      case .systemAction: return "システム操作"
+      }
+    }
+  }
+
   private var listener: NWListener?
   private var activeConnection: NWConnection?
 
@@ -238,8 +277,10 @@ final class BonjourServer {
       switch result {
       case .success:
         response = AckMessage(requestId: request.requestId, success: true)
+        self?.recordExecution(type: request.action.type, succeeded: true, errorMessage: nil)
       case .failure(let error):
         response = AckMessage(requestId: request.requestId, success: false, errorMessage: error.localizedDescription)
+        self?.recordExecution(type: request.action.type, succeeded: false, errorMessage: error.localizedDescription)
       }
       self?.send(response, on: connection)
     }
@@ -253,6 +294,18 @@ final class BonjourServer {
       activateApplication(bundleIdentifier: request.action.target, completion: completion)
     default:
       actionExecutor.execute(request.action, completion: completion)
+    }
+  }
+
+  /// 直近の実行結果を記録する。UIから参照するプロパティのためメインスレッドで更新する
+  private func recordExecution(type: ActionType, succeeded: Bool, errorMessage: String?) {
+    DispatchQueue.main.async { [weak self] in
+      self?.lastExecutionLog = ExecutionLogEntry(
+        actionType: type,
+        succeeded: succeeded,
+        errorMessage: errorMessage,
+        timestamp: Date()
+      )
     }
   }
 
