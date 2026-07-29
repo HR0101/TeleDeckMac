@@ -8,6 +8,8 @@
 
 import Foundation
 import Observation
+// 並び替えで使うArray.move(fromOffsets:toOffset:)はSwiftUIが提供している
+import SwiftUI
 
 @Observable
 final class ProfileStore {
@@ -85,6 +87,181 @@ final class ProfileStore {
     if activeProfileId == id {
       activeProfileId = profiles[0].id
     }
+    notifyChange()
+  }
+
+  /// プロファイルを丸ごと複製する。ボタンのidも振り直さないと元のプロファイルと
+  /// 同じidが複数存在してしまうため、フォルダーの親子関係を保ったまま新しいidへ写し替える。
+  /// 複製したプロファイルを返し、呼び出し側が選択状態を移せるようにする
+  @discardableResult
+  func duplicateProfile(id: UUID) -> ProfileConfig? {
+    guard let source = profiles.first(where: { $0.id == id }) else { return nil }
+
+    // 旧id → 新idの対応表を先に作り、folderIdの参照を新しいidへ張り替える
+    var idMapping: [UUID: UUID] = [:]
+    for button in source.buttons {
+      idMapping[button.id] = UUID()
+    }
+
+    let copiedButtons = source.buttons.map { button -> ButtonConfig in
+      var copy = button
+      copy.id = idMapping[button.id] ?? UUID()
+      copy.folderId = button.folderId.flatMap { idMapping[$0] }
+      return copy
+    }
+
+    var duplicated = source
+    duplicated.id = UUID()
+    duplicated.name = Self.duplicatedName(for: source.name, existing: profiles.map(\.name))
+    duplicated.buttons = copiedButtons
+    // 自動切替の対象アプリが重複すると、どちらが選ばれるか予測できなくなるため引き継がない
+    duplicated.triggerAppBundleId = nil
+
+    let insertIndex = (profiles.firstIndex(where: { $0.id == id }).map { $0 + 1 }) ?? profiles.count
+    profiles.insert(duplicated, at: insertIndex)
+    notifyChange()
+    return duplicated
+  }
+
+  /// 「Excel用のコピー」「Excel用のコピー 2」…と、既存の名前と重複しない名前を作る
+  private static func duplicatedName(for name: String, existing: [String]) -> String {
+    let base = "\(name)のコピー"
+    guard existing.contains(base) else { return base }
+
+    var suffix = 2
+    while existing.contains("\(base) \(suffix)") {
+      suffix += 1
+    }
+    return "\(base) \(suffix)"
+  }
+
+  // MARK: - 書き出し・読み込み
+
+  /// 指定したプロファイルをJSONへ書き出す。別のMacへ設定を持っていく用途を想定しているため、
+  /// そのMacに存在しないアプリを指す可能性のあるアイコン画像データは載せない（ファイルサイズも抑えられる）
+  func exportData(profileId: UUID) throws -> Data {
+    guard let profile = profiles.first(where: { $0.id == profileId }) else {
+      throw ProfileTransferError.profileNotFound
+    }
+    return try Self.encoder.encode(Self.strippingIconData(from: profile))
+  }
+
+  /// 全プロファイルをまとめてJSONへ書き出す
+  func exportAllData() throws -> Data {
+    try Self.encoder.encode(profiles.map(Self.strippingIconData(from:)))
+  }
+
+  /// 書き出したJSONを読み込んで追加する。単一プロファイル・複数プロファイルのどちらの形式も受け付ける。
+  /// 既存のプロファイルは変更せず、常に新しいidを振って追加する（上書き事故を避けるため）。
+  /// 追加した件数を返す
+  @discardableResult
+  func importProfiles(from data: Data) throws -> Int {
+    let decoder = JSONDecoder()
+
+    let imported: [ProfileConfig]
+    if let many = try? decoder.decode([ProfileConfig].self, from: data) {
+      imported = many
+    } else if let one = try? decoder.decode(ProfileConfig.self, from: data) {
+      imported = [one]
+    } else {
+      throw ProfileTransferError.unreadableFile
+    }
+
+    guard !imported.isEmpty else { throw ProfileTransferError.unreadableFile }
+
+    for profile in imported {
+      var copy = Self.reassigningIds(of: profile)
+      copy.name = Self.uniqueName(for: copy.name, existing: profiles.map(\.name))
+      // 自動切替の対象アプリが既存と重複すると、どちらが選ばれるか予測できなくなるため引き継がない
+      if let triggerId = copy.triggerAppBundleId,
+         profiles.contains(where: { $0.triggerAppBundleId == triggerId }) {
+        copy.triggerAppBundleId = nil
+      }
+      profiles.append(copy)
+    }
+
+    notifyChange()
+    return imported.count
+  }
+
+  enum ProfileTransferError: LocalizedError {
+    case profileNotFound
+    case unreadableFile
+
+    var errorDescription: String? {
+      switch self {
+      case .profileNotFound:
+        return "対象のプロファイルが見つかりませんでした"
+      case .unreadableFile:
+        return "TeleDeckのプロファイル書き出しファイルとして読み取れませんでした"
+      }
+    }
+  }
+
+  private static let encoder: JSONEncoder = {
+    let encoder = JSONEncoder()
+    // 書き出したファイルを人が開いて確認・編集できるように整形する
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    return encoder
+  }()
+
+  /// 別のMacでは意味を持たないアイコンのバイナリを取り除く
+  private static func strippingIconData(from profile: ProfileConfig) -> ProfileConfig {
+    var copy = profile
+    copy.buttons = profile.buttons.map { button in
+      var strippedButton = button
+      strippedButton.applicationIconPNGData = nil
+      return strippedButton
+    }
+    return copy
+  }
+
+  /// プロファイルとボタンのidを新しく振り直す。フォルダーの親子関係は対応表で保つ
+  private static func reassigningIds(of profile: ProfileConfig) -> ProfileConfig {
+    var idMapping: [UUID: UUID] = [:]
+    for button in profile.buttons {
+      idMapping[button.id] = UUID()
+    }
+
+    var copy = profile
+    copy.id = UUID()
+    copy.buttons = profile.buttons.map { button in
+      var newButton = button
+      newButton.id = idMapping[button.id] ?? UUID()
+      newButton.folderId = button.folderId.flatMap { idMapping[$0] }
+      return newButton
+    }
+    return copy
+  }
+
+  /// 既存の名前と衝突しない名前を作る
+  private static func uniqueName(for name: String, existing: [String]) -> String {
+    guard existing.contains(name) else { return name }
+
+    var suffix = 2
+    while existing.contains("\(name) \(suffix)") {
+      suffix += 1
+    }
+    return "\(name) \(suffix)"
+  }
+
+  /// サイドバーのドラッグによる並び替えを反映する
+  func moveProfiles(fromOffsets source: IndexSet, toOffset destination: Int) {
+    profiles.move(fromOffsets: source, toOffset: destination)
+    notifyChange()
+  }
+
+  /// 削除を取り消せるようにするため、削除前のプロファイル一覧をそのまま書き戻す
+  func restoreProfiles(_ snapshot: [ProfileConfig], activeProfileId restoredActiveId: UUID) {
+    profiles = snapshot
+    activeProfileId = snapshot.contains(where: { $0.id == restoredActiveId }) ? restoredActiveId : snapshot[0].id
+    notifyChange()
+  }
+
+  /// 指定プロファイルのボタン一覧のみを書き戻す（ボタン削除の取り消しに使う）
+  func restoreButtons(_ snapshot: [ButtonConfig], inProfile profileId: UUID) {
+    guard let profileIndex = profiles.firstIndex(where: { $0.id == profileId }) else { return }
+    profiles[profileIndex].buttons = snapshot
     notifyChange()
   }
 
