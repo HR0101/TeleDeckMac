@@ -18,6 +18,7 @@ final class WindowLayoutManager {
     case noScreen
     case unknownPreset(String)
     case axOperationFailed(String)
+    case accessibilityPermissionDenied
 
     var errorDescription: String? {
       switch self {
@@ -31,6 +32,8 @@ final class WindowLayoutManager {
         return "未対応のウィンドウ配置プリセットです: \(preset)"
       case .axOperationFailed(let detail):
         return "ウィンドウの位置・サイズの変更に失敗しました: \(detail)"
+      case .accessibilityPermissionDenied:
+        return "Mac側でアクセシビリティの権限が許可されていません。メニューバーのTeleDeckから許可してください"
       }
     }
   }
@@ -41,13 +44,18 @@ final class WindowLayoutManager {
   private static let threeSplitMaxAppCount = 3
 
   func apply(preset: String, completion: @escaping (Result<Void, Error>) -> Void) {
+    // AXUIElementによるウィンドウ操作は権限が無いと必ず失敗する。
+    // 「ウィンドウを取得できませんでした」という結果だけを返すと原因が伝わらないため、先に判定する
+    guard PermissionMonitor.checkAccessibilityTrusted() else {
+      completion(.failure(LayoutError.accessibilityPermissionDenied))
+      return
+    }
+
     switch preset {
-    case "left-half", "right-half", "maximize", "centered":
-      applySingleWindowLayout(preset: preset, completion: completion)
-    case "three-split":
+    case WindowLayoutPreset.threeSplit.rawValue:
       applyThreeSplitLayout(completion: completion)
     default:
-      completion(.failure(LayoutError.unknownPreset(preset)))
+      applySingleWindowLayout(preset: preset, completion: completion)
     }
   }
 
@@ -72,17 +80,8 @@ final class WindowLayoutManager {
       return
     }
 
-    let targetFrame: CGRect
-    switch preset {
-    case "left-half":
-      targetFrame = Self.leftHalfFrame(in: screenFrame)
-    case "right-half":
-      targetFrame = Self.rightHalfFrame(in: screenFrame)
-    case "maximize":
-      targetFrame = screenFrame
-    case "centered":
-      targetFrame = Self.centeredFrame(in: screenFrame)
-    default:
+    guard let layout = WindowLayoutPreset(rawValue: preset),
+          let targetFrame = Self.frame(for: layout, in: screenFrame) else {
       completion(.failure(LayoutError.unknownPreset(preset)))
       return
     }
@@ -133,12 +132,37 @@ final class WindowLayoutManager {
 
   // MARK: - フレーム計算
 
-  private static func leftHalfFrame(in screenFrame: CGRect) -> CGRect {
-    CGRect(x: screenFrame.minX, y: screenFrame.minY, width: screenFrame.width / 2, height: screenFrame.height)
-  }
+  /// プリセットに対応するウィンドウの矩形を返す（Cocoa座標系＝画面左下原点・Y上向き）。
+  /// three-splitは複数ウィンドウを対象とするため、ここでは扱わずnilを返す
+  private static func frame(for preset: WindowLayoutPreset, in screenFrame: CGRect) -> CGRect? {
+    let halfWidth = screenFrame.width / 2
+    let halfHeight = screenFrame.height / 2
 
-  private static func rightHalfFrame(in screenFrame: CGRect) -> CGRect {
-    CGRect(x: screenFrame.midX, y: screenFrame.minY, width: screenFrame.width / 2, height: screenFrame.height)
+    switch preset {
+    case .leftHalf:
+      return CGRect(x: screenFrame.minX, y: screenFrame.minY, width: halfWidth, height: screenFrame.height)
+    case .rightHalf:
+      return CGRect(x: screenFrame.midX, y: screenFrame.minY, width: halfWidth, height: screenFrame.height)
+    // Cocoa座標系はY軸が上向きのため、画面上半分はminYではなくmidYが起点になる
+    case .topHalf:
+      return CGRect(x: screenFrame.minX, y: screenFrame.midY, width: screenFrame.width, height: halfHeight)
+    case .bottomHalf:
+      return CGRect(x: screenFrame.minX, y: screenFrame.minY, width: screenFrame.width, height: halfHeight)
+    case .topLeftQuarter:
+      return CGRect(x: screenFrame.minX, y: screenFrame.midY, width: halfWidth, height: halfHeight)
+    case .topRightQuarter:
+      return CGRect(x: screenFrame.midX, y: screenFrame.midY, width: halfWidth, height: halfHeight)
+    case .bottomLeftQuarter:
+      return CGRect(x: screenFrame.minX, y: screenFrame.minY, width: halfWidth, height: halfHeight)
+    case .bottomRightQuarter:
+      return CGRect(x: screenFrame.midX, y: screenFrame.minY, width: halfWidth, height: halfHeight)
+    case .maximize:
+      return screenFrame
+    case .centered:
+      return centeredFrame(in: screenFrame)
+    case .threeSplit:
+      return nil
+    }
   }
 
   private static func centeredFrame(in screenFrame: CGRect) -> CGRect {
