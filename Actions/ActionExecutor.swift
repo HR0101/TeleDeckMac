@@ -22,6 +22,7 @@ final class ActionExecutor {
     case invalidVolume(Int)
     case emptySteps
     case appleScriptFailed(String)
+    case accessibilityPermissionDenied
 
     var errorDescription: String? {
       switch self {
@@ -39,8 +40,23 @@ final class ActionExecutor {
         return "マルチアクションのステップが指定されていません"
       case .appleScriptFailed(let message):
         return "AppleScriptの実行に失敗しました: \(message)"
+      case .accessibilityPermissionDenied:
+        return "Mac側でアクセシビリティの権限が許可されていません。メニューバーのTeleDeckから許可してください"
       }
     }
+  }
+
+  /// CGEventによるキー・マウス操作は、アクセシビリティ権限が無い場合でもAPIがエラーを返さず、
+  /// 「呼び出しは成功したのに何も起こらない」状態になる。原因が分からないまま操作が効かない事態を
+  /// 避けるため、イベントを送出する系のアクションは必ずこの判定を先に通す
+  private func ensureAccessibilityPermission(
+    _ completion: @escaping (Result<Void, Error>) -> Void
+  ) -> Bool {
+    guard PermissionMonitor.checkAccessibilityTrusted() else {
+      completion(.failure(ExecutionError.accessibilityPermissionDenied))
+      return false
+    }
+    return true
   }
 
   func execute(_ action: ActionPayload, completion: @escaping (Result<Void, Error>) -> Void) {
@@ -164,6 +180,8 @@ final class ActionExecutor {
   // MARK: - hotkey
 
   private func sendHotkey(keys: [String], completion: @escaping (Result<Void, Error>) -> Void) {
+    guard ensureAccessibilityPermission(completion) else { return }
+
     guard !keys.isEmpty else {
       completion(.failure(ExecutionError.unknownKey("(未指定)")))
       return
@@ -223,6 +241,8 @@ final class ActionExecutor {
   private static let typeTextChunkSize = 20
 
   private func typeText(_ text: String?, completion: @escaping (Result<Void, Error>) -> Void) {
+    guard ensureAccessibilityPermission(completion) else { return }
+
     guard let text, !text.isEmpty else {
       completion(.failure(ExecutionError.emptyText))
       return
@@ -305,6 +325,10 @@ final class ActionExecutor {
       toggleMicrophoneMute(completion: completion)
       return
     }
+
+    // マイクミュート以外はAuxキーをCGEventとして送出するため、権限の判定が必要になる
+    guard ensureAccessibilityPermission(completion) else { return }
+
     guard let keyCode = Self.mediaKeyCodes[key] else {
       completion(.failure(ExecutionError.unknownKey(key)))
       return
