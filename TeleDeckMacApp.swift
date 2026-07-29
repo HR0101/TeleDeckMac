@@ -12,6 +12,7 @@ struct TeleDeckMacApp: App {
   @State private var pairingManager: PairingManager
   @State private var profileStore: ProfileStore
   @State private var server: BonjourServer
+  @State private var permissionMonitor = PermissionMonitor()
 
   init() {
     let newPairingManager = PairingManager()
@@ -28,9 +29,22 @@ struct TeleDeckMacApp: App {
     _server = State(initialValue: newServer)
   }
 
+  /// アクセシビリティ権限が未許可の間は、ポップオーバーを開かなくても
+  /// メニューバーのアイコンだけで対処が必要なことに気づけるようにする
+  private var menuBarSystemImage: String {
+    permissionMonitor.isAccessibilityTrusted
+      ? "rectangle.grid.3x2.fill"
+      : "exclamationmark.triangle.fill"
+  }
+
   var body: some Scene {
-    MenuBarExtra("TeleDeck", systemImage: "rectangle.grid.3x2.fill") {
-      ContentView(pairingManager: pairingManager, server: server, profileStore: profileStore)
+    MenuBarExtra("TeleDeck", systemImage: menuBarSystemImage) {
+      ContentView(
+        pairingManager: pairingManager,
+        server: server,
+        profileStore: profileStore,
+        permissionMonitor: permissionMonitor
+      )
     }
     .menuBarExtraStyle(.window)
 
