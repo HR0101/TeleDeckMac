@@ -19,14 +19,40 @@ struct ProfileEditorView: View {
   @State private var isShowingNewProfileAlert = false
   @State private var newProfileNameDraft = ""
   @State private var hoveredProfileId: UUID?
+  /// 削除を取り消せるようにするため、削除直前の状態を保持する
+  @State private var undoSnapshot: ProfileDeletionSnapshot?
+  @State private var undoDismissWorkItem: DispatchWorkItem?
+  /// 書き出し・読み込みの結果をユーザーへ知らせるためのメッセージ
+  @State private var transferMessage: TransferMessage?
+
+  /// 書き出し・読み込みの結果。成功と失敗で見せ方を変えるためisErrorを持つ
+  private struct TransferMessage: Identifiable {
+    let id = UUID()
+    let text: String
+    let isError: Bool
+  }
+
+  /// 取り消しバーを自動的に閉じるまでの時間
+  private static let undoBarDuration: TimeInterval = 8
 
   var body: some View {
     NavigationSplitView {
       sidebar
     } detail: {
       if let profile = selectedProfile {
-        ProfileDetailView(profileStore: profileStore, profileId: profile.id)
-          .id(profile.id)
+        ProfileDetailView(
+          profileStore: profileStore,
+          profileId: profile.id,
+          onRequestUndo: { buttons, profileId, message in
+            presentUndo(
+              ProfileDeletionSnapshot(
+                kind: .buttons(snapshot: buttons, profileId: profileId),
+                message: message
+              )
+            )
+          }
+        )
+        .id(profile.id)
       } else {
         ZStack {
           GamingBackground(animated: false)
@@ -59,7 +85,7 @@ struct ProfileEditorView: View {
     ) {
       Button("削除", role: .destructive) {
         if let id = profileIdPendingDeletion {
-          profileStore.deleteProfile(id: id)
+          deleteProfile(id: id)
         }
         profileIdPendingDeletion = nil
       }
@@ -69,6 +95,18 @@ struct ProfileEditorView: View {
     } message: {
       Text(profileDeletionWarning)
     }
+    .overlay(alignment: .bottom) {
+      if let undoSnapshot {
+        undoBar(for: undoSnapshot)
+      }
+    }
+    .alert(item: $transferMessage) { message in
+      Alert(
+        title: Text(message.isError ? "エラー" : "完了"),
+        message: Text(message.text),
+        dismissButton: .default(Text("OK"))
+      )
+    }
     .alert("新規プロファイル", isPresented: $isShowingNewProfileAlert) {
       TextField("プロファイル名", text: $newProfileNameDraft)
       Button("作成") { addProfile() }
@@ -76,6 +114,107 @@ struct ProfileEditorView: View {
     } message: {
       Text("プロファイルの名前を入力してください。後から変更できます。")
     }
+  }
+
+  // MARK: - 削除の取り消し
+
+  /// 削除操作を元へ戻すために必要な情報。プロファイル削除とボタン削除の両方を扱う
+  private struct ProfileDeletionSnapshot {
+    enum Kind {
+      /// プロファイル一覧全体を戻す
+      case profiles(snapshot: [ProfileConfig], activeProfileId: UUID)
+      /// 指定プロファイルのボタン一覧だけを戻す
+      case buttons(snapshot: [ButtonConfig], profileId: UUID)
+    }
+
+    let kind: Kind
+    let message: String
+  }
+
+  private func deleteProfile(id: UUID) {
+    // 削除できない（最後の1つ）場合は取り消しバーも出さない
+    guard profileStore.profiles.count > 1,
+          let deleted = profileStore.profiles.first(where: { $0.id == id }) else { return }
+
+    let snapshot = profileStore.profiles
+    let previousActiveId = profileStore.activeProfileId
+    profileStore.deleteProfile(id: id)
+
+    presentUndo(
+      ProfileDeletionSnapshot(
+        kind: .profiles(snapshot: snapshot, activeProfileId: previousActiveId),
+        message: "「\(deleted.name)」を削除しました"
+      )
+    )
+  }
+
+  private func presentUndo(_ snapshot: ProfileDeletionSnapshot) {
+    undoDismissWorkItem?.cancel()
+
+    withAnimation(.easeOut(duration: 0.2)) {
+      undoSnapshot = snapshot
+    }
+
+    let workItem = DispatchWorkItem {
+      withAnimation(.easeIn(duration: 0.2)) {
+        undoSnapshot = nil
+      }
+    }
+    undoDismissWorkItem = workItem
+    DispatchQueue.main.asyncAfter(deadline: .now() + Self.undoBarDuration, execute: workItem)
+  }
+
+  private func performUndo(_ snapshot: ProfileDeletionSnapshot) {
+    switch snapshot.kind {
+    case .profiles(let profiles, let activeProfileId):
+      profileStore.restoreProfiles(profiles, activeProfileId: activeProfileId)
+    case .buttons(let buttons, let profileId):
+      profileStore.restoreButtons(buttons, inProfile: profileId)
+    }
+    dismissUndo()
+  }
+
+  private func dismissUndo() {
+    undoDismissWorkItem?.cancel()
+    undoDismissWorkItem = nil
+    withAnimation(.easeIn(duration: 0.2)) {
+      undoSnapshot = nil
+    }
+  }
+
+  private func undoBar(for snapshot: ProfileDeletionSnapshot) -> some View {
+    HStack(spacing: 14) {
+      Image(systemName: "trash")
+        .foregroundStyle(GamingPalette.mutedForeground)
+
+      Text(snapshot.message)
+        .font(.subheadline)
+        .foregroundStyle(GamingPalette.foreground)
+        .lineLimit(1)
+
+      Button("取り消す") {
+        performUndo(snapshot)
+      }
+      .buttonStyle(GamingButtonStyle(isProminent: true))
+
+      Button {
+        dismissUndo()
+      } label: {
+        Image(systemName: "xmark")
+          .font(.caption.weight(.bold))
+          .foregroundStyle(GamingPalette.mutedForeground)
+      }
+      .buttonStyle(.plain)
+      .help("閉じる")
+    }
+    .padding(.horizontal, 16)
+    .padding(.vertical, 10)
+    .background(.ultraThinMaterial, in: Capsule())
+    .background(GamingPalette.card.opacity(0.94), in: Capsule())
+    .overlay(Capsule().stroke(GamingPalette.accent.opacity(0.45), lineWidth: 1))
+    .shadow(color: .black.opacity(0.4), radius: 16, y: 6)
+    .padding(.bottom, 22)
+    .transition(.move(edge: .bottom).combined(with: .opacity))
   }
 
   private var selectedProfile: ProfileConfig? {
@@ -107,19 +246,46 @@ struct ProfileEditorView: View {
       .padding(.top, 18)
       .padding(.bottom, 14)
 
-      newProfileButton
-        .padding(.horizontal, 12)
-        .padding(.bottom, 12)
+      VStack(spacing: 8) {
+        newProfileButton
 
-      ScrollView {
-        LazyVStack(spacing: 8) {
-          ForEach(profileStore.profiles) { profile in
-            profileRow(profile)
+        HStack(spacing: 8) {
+          Button {
+            importProfiles()
+          } label: {
+            Label("読み込み", systemImage: "square.and.arrow.down")
+              .font(.caption.weight(.semibold))
+              .frame(maxWidth: .infinity)
           }
+          .buttonStyle(GamingButtonStyle())
+
+          Button {
+            exportAllProfiles()
+          } label: {
+            Label("全て書き出し", systemImage: "square.and.arrow.up")
+              .font(.caption.weight(.semibold))
+              .frame(maxWidth: .infinity)
+          }
+          .buttonStyle(GamingButtonStyle())
         }
-        .padding(.horizontal, 12)
-        .padding(.bottom, 12)
       }
+      .padding(.horizontal, 12)
+      .padding(.bottom, 12)
+
+      // 並び替えを行うためListを使う。見た目は既存のカード表現をそのまま載せる
+      List {
+        ForEach(profileStore.profiles) { profile in
+          profileRow(profile)
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
+        }
+        .onMove { indices, newOffset in
+          profileStore.moveProfiles(fromOffsets: indices, toOffset: newOffset)
+        }
+      }
+      .listStyle(.plain)
+      .scrollContentBackground(.hidden)
 
       HStack(spacing: 7) {
         Circle()
@@ -222,6 +388,15 @@ struct ProfileEditorView: View {
       hoveredProfileId = hovering ? profile.id : nil
     }
     .contextMenu {
+      Button("複製") {
+        if let duplicated = profileStore.duplicateProfile(id: profile.id) {
+          selectedProfileId = duplicated.id
+        }
+      }
+      Button("書き出す…") {
+        exportProfile(id: profile.id)
+      }
+      Divider()
       Button("削除", role: .destructive) {
         profileIdPendingDeletion = profile.id
       }
@@ -243,6 +418,56 @@ struct ProfileEditorView: View {
         .frame(maxWidth: .infinity)
     }
     .buttonStyle(GamingButtonStyle(isProminent: true))
+  }
+
+  // MARK: - 書き出し・読み込み
+
+  private func exportProfile(id: UUID) {
+    let name = profileStore.profiles.first(where: { $0.id == id })?.name ?? "プロファイル"
+    save(defaultFileName: "\(name).teledeckprofile.json") {
+      try profileStore.exportData(profileId: id)
+    }
+  }
+
+  private func exportAllProfiles() {
+    save(defaultFileName: "TeleDeckプロファイル.json") {
+      try profileStore.exportAllData()
+    }
+  }
+
+  /// NSSavePanelで保存先を選ばせ、書き出しを実行する
+  private func save(defaultFileName: String, makeData: () throws -> Data) {
+    let panel = NSSavePanel()
+    panel.allowedContentTypes = [.json]
+    panel.nameFieldStringValue = defaultFileName
+    panel.canCreateDirectories = true
+
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+
+    do {
+      let data = try makeData()
+      try data.write(to: url, options: .atomic)
+    } catch {
+      transferMessage = TransferMessage(text: "書き出しに失敗しました: \(error.localizedDescription)", isError: true)
+    }
+  }
+
+  private func importProfiles() {
+    let panel = NSOpenPanel()
+    panel.allowedContentTypes = [.json]
+    panel.canChooseDirectories = false
+    panel.allowsMultipleSelection = false
+
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+
+    do {
+      let data = try Data(contentsOf: url)
+      let count = try profileStore.importProfiles(from: data)
+      transferMessage = TransferMessage(text: "\(count)個のプロファイルを読み込みました", isError: false)
+      selectedProfileId = profileStore.profiles.last?.id
+    } catch {
+      transferMessage = TransferMessage(text: "読み込みに失敗しました: \(error.localizedDescription)", isError: true)
+    }
   }
 
   private func addProfile() {
@@ -275,6 +500,12 @@ private struct ProfileDetailView: View {
   @State private var hoveredEmptyCellId: String?
   @State private var buttonPendingDeletion: ButtonConfig?
   @State private var dropErrorMessage: String?
+  @State private var isShowingApplicationPicker = false
+  /// グリッドを縮めた結果はみ出すボタンがある場合に、実行前へ確認を挟むための保留値
+  @State private var pendingGridResize: (rows: Int, columns: Int)?
+
+  /// ボタン削除を取り消せるようにするため、削除前のボタン一覧を親へ渡す
+  var onRequestUndo: ([ButtonConfig], UUID, String) -> Void
 
   private var columns: [GridItem] {
     Array(
@@ -338,7 +569,10 @@ private struct ProfileDetailView: View {
     ) {
       Button("削除", role: .destructive) {
         if let button = buttonPendingDeletion {
+          // 削除前の状態を親へ預け、取り消しバーから元へ戻せるようにする
+          let snapshot = profile.buttons
           profileStore.deleteButton(id: button.id, fromProfile: profileId)
+          onRequestUndo(snapshot, profileId, "「\(button.label)」を削除しました")
         }
         buttonPendingDeletion = nil
       }
@@ -347,6 +581,36 @@ private struct ProfileDetailView: View {
       }
     } message: {
       Text(buttonDeletionWarningMessage)
+    }
+    .confirmationDialog(
+      "はみ出すボタンがあります",
+      isPresented: Binding(
+        get: { pendingGridResize != nil },
+        set: { if !$0 { pendingGridResize = nil } }
+      ),
+      titleVisibility: .visible
+    ) {
+      Button("そのまま変更", role: .destructive) {
+        if let pendingGridResize {
+          commitGridSize(rows: pendingGridResize.rows, columns: pendingGridResize.columns)
+        }
+        pendingGridResize = nil
+      }
+      Button("キャンセル", role: .cancel) {
+        pendingGridResize = nil
+      }
+    } message: {
+      Text(gridResizeWarningMessage)
+    }
+    .sheet(isPresented: $isShowingApplicationPicker) {
+      ApplicationPickerView(
+        onSelect: { application in
+          applyTriggerApp(bundleIdentifier: application.bundleIdentifier)
+        },
+        onChooseFromFinder: {
+          chooseTriggerAppFromFinder()
+        }
+      )
     }
     .alert("配置できません", isPresented: Binding(
       get: { dropErrorMessage != nil },
@@ -501,17 +765,26 @@ private struct ProfileDetailView: View {
     profileStore.updateProfile(updated)
   }
 
-  /// NSOpenPanelで.appを選ばせ、そのBundle IDをtriggerAppBundleIdへ反映する
+  /// Finderの階層をたどらずに検索して選べるよう、ボタン編集画面と同じアプリ一覧シートを使う
   private func chooseTriggerApp() {
+    isShowingApplicationPicker = true
+  }
+
+  /// 標準的な場所に無いアプリのために、Finderで直接選ぶ手段も残す
+  private func chooseTriggerAppFromFinder() {
     let panel = NSOpenPanel()
     panel.allowedContentTypes = [.application]
     panel.canChooseDirectories = false
     panel.allowsMultipleSelection = false
     panel.directoryURL = URL(fileURLWithPath: "/Applications")
     guard panel.runModal() == .OK, let url = panel.url else { return }
-    guard let bundleId = Bundle(url: url)?.bundleIdentifier else { return }
+    applyTriggerApp(bundleIdentifier: Bundle(url: url)?.bundleIdentifier)
+  }
+
+  private func applyTriggerApp(bundleIdentifier: String?) {
+    guard let bundleIdentifier else { return }
     var updated = profile
-    updated.triggerAppBundleId = bundleId
+    updated.triggerAppBundleId = bundleIdentifier
     profileStore.updateProfile(updated)
   }
 
@@ -632,11 +905,37 @@ private struct ProfileDetailView: View {
   private static let gridRowsRange = 1...8
   private static let gridColumnsRange = 1...10
 
+  /// グリッドを縮めると範囲外のボタンが表示されなくなるため、該当がある場合は確認を挟む。
+  /// データ自体は消さないので、行・列を戻せばそのまま再び現れる
   private func updateGridSize(rows: Int, columns: Int) {
+    if buttonsOutside(rows: rows, columns: columns).isEmpty {
+      commitGridSize(rows: rows, columns: columns)
+    } else {
+      pendingGridResize = (rows: rows, columns: columns)
+    }
+  }
+
+  private func commitGridSize(rows: Int, columns: Int) {
     var updated = profile
     updated.gridRows = rows
     updated.gridColumns = columns
     profileStore.updateProfile(updated)
+  }
+
+  /// 指定した行数・列数に収まらなくなるボタン
+  private func buttonsOutside(rows: Int, columns: Int) -> [ButtonConfig] {
+    profile.buttons.filter { $0.row >= rows || $0.col >= columns }
+  }
+
+  private var gridResizeWarningMessage: String {
+    guard let pendingGridResize else { return "" }
+    let hidden = buttonsOutside(rows: pendingGridResize.rows, columns: pendingGridResize.columns)
+    let names = hidden.prefix(3).map(\.label).joined(separator: "、")
+    let suffix = hidden.count > 3 ? "ほか\(hidden.count - 3)個" : ""
+    return """
+      \(pendingGridResize.rows)×\(pendingGridResize.columns)に変更すると、\(hidden.count)個のボタン（\(names)\(suffix)）が範囲外になり表示されなくなります。
+      設定は消えないため、行・列を元に戻せば再び表示されます。
+      """
   }
 
   private var folderBreadcrumb: some View {
@@ -997,4 +1296,21 @@ private struct GridPosition: Identifiable {
 
 #Preview {
   ProfileEditorView(profileStore: ProfileStore())
+}
+
+#Preview("詳細") {
+  ProfileDetailViewPreviewWrapper()
+}
+
+/// ProfileDetailViewはprivateなため、プレビュー用の薄いラッパーを用意する
+private struct ProfileDetailViewPreviewWrapper: View {
+  private let store = ProfileStore()
+
+  var body: some View {
+    ProfileDetailView(
+      profileStore: store,
+      profileId: store.activeProfileId,
+      onRequestUndo: { _, _, _ in }
+    )
+  }
 }
