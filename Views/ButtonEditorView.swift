@@ -180,27 +180,6 @@ private let actionChoiceGroups = [
   ])
 ]
 
-/// ウィンドウ配置アクションのプリセット。rawValueはMac側WindowLayoutManagerが解釈する文字列と一致させる
-private enum WindowLayoutPreset: String, CaseIterable, Identifiable {
-  case leftHalf = "left-half"
-  case rightHalf = "right-half"
-  case maximize = "maximize"
-  case centered = "centered"
-  case threeSplit = "three-split"
-
-  var id: String { rawValue }
-
-  var displayName: String {
-    switch self {
-    case .leftHalf: return "左半分"
-    case .rightHalf: return "右半分"
-    case .maximize: return "最大化"
-    case .centered: return "中央寄せ"
-    case .threeSplit: return "3分割"
-    }
-  }
-}
-
 struct ButtonEditorView: View {
   @Environment(\.dismiss) private var dismiss
   @State private var draft: ButtonConfig
@@ -217,6 +196,11 @@ struct ButtonEditorView: View {
   @State private var isShowingApplicationPicker = false
   /// アイコンを未カスタマイズ（新規ボタンの初期値のまま）の間だけ、選んだアクションに合わせてアイコンを自動で変える
   @State private var automaticallyPicksIcon: Bool
+  /// テスト実行の状態と直近の結果。Mac上での編集なので、iPadを介さず直接実行して確かめられる
+  @State private var isTestRunning = false
+  @State private var testResultMessage: String?
+  @State private var testSucceeded = false
+  private let testActionExecutor = ActionExecutor()
 
   let onSave: (ButtonConfig) -> Void
 
@@ -254,6 +238,8 @@ struct ButtonEditorView: View {
                 .foregroundStyle(.secondary)
             }
           }
+
+          testRunSection
 
         case .appearance:
           Section("表示") {
@@ -311,6 +297,67 @@ struct ButtonEditorView: View {
     .onDisappear {
       // シート自体が閉じられた場合の保険として、監視を確実に解除する
       removeHotkeyMonitor()
+    }
+  }
+
+  // MARK: - テスト実行
+
+  /// 保存してiPadで押すまで動作を確認できないと、ホットキーやウィンドウ配置が正しいか
+  /// 分からないまま往復することになるため、その場でMac上で試せるようにする
+  @ViewBuilder
+  private var testRunSection: some View {
+    // フォルダーとタブ操作はパネル上・タブ画面上の文脈でしか意味を持たないため対象外
+    if draft.action.type != .openFolder,
+       draft.action.type != .activateTab,
+       draft.action.type != .closeTab {
+      Section {
+        HStack(spacing: 10) {
+          Button {
+            runTest()
+          } label: {
+            Label(
+              isTestRunning ? "実行中…" : "このアクションをテスト実行",
+              systemImage: "play.circle"
+            )
+          }
+          .buttonStyle(GamingButtonStyle())
+          .disabled(isTestRunning)
+
+          if let testResultMessage {
+            Label(
+              testResultMessage,
+              systemImage: testSucceeded ? "checkmark.circle.fill" : "exclamationmark.circle.fill"
+            )
+            .font(.caption)
+            .foregroundStyle(testSucceeded ? GamingPalette.success : GamingPalette.destructive)
+            .fixedSize(horizontal: false, vertical: true)
+          }
+        }
+      } header: {
+        Text("動作確認")
+      } footer: {
+        Text("保存しなくても、今の設定のままこのMacで実行して確認できます")
+          .foregroundStyle(.secondary)
+      }
+    }
+  }
+
+  private func runTest() {
+    isTestRunning = true
+    testResultMessage = nil
+
+    testActionExecutor.execute(draft.action) { result in
+      DispatchQueue.main.async {
+        isTestRunning = false
+        switch result {
+        case .success:
+          testSucceeded = true
+          testResultMessage = "実行しました"
+        case .failure(let error):
+          testSucceeded = false
+          testResultMessage = error.localizedDescription
+        }
+      }
     }
   }
 
