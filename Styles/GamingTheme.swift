@@ -19,6 +19,8 @@ enum GamingPalette {
   static let mutedForeground = Color(hex: 0x94A3B8)
   static let destructive = Color(hex: 0xEF4444)
   static let success = Color(hex: 0x22C55E)
+  /// 権限の未許可など、エラーではないが対処が必要な状態に使う警告色
+  static let warning = Color(hex: 0xF59E0B)
   /// iPad側の既定アクセント（AccentColorOption.purple）と同じ紫
   static let accent = Color(hex: 0x7C3AED)
 }
