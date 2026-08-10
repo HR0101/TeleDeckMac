@@ -102,6 +102,11 @@ private enum ButtonEditorStep {
   case appearance
 }
 
+enum ButtonEditorPresentation: Equatable {
+  case sheet
+  case inspector
+}
+
 private struct ActionChoice: Identifiable {
   let type: ActionType
   /// mediaKey用。同じActionType内で複数の選択肢（音量を上げる/下げる等）を区別するためのキー
@@ -183,7 +188,7 @@ private let actionChoiceGroups = [
 struct ButtonEditorView: View {
   @Environment(\.dismiss) private var dismiss
   @State private var draft: ButtonConfig
-  @State private var editStep: ButtonEditorStep = .action
+  @State private var editStep: ButtonEditorStep
   @State private var isRecordingHotkey = false
   @State private var hotkeyRecordingKeys: [String] = []
   @State private var hotkeyRecordingGeneration = 0
@@ -202,10 +207,36 @@ struct ButtonEditorView: View {
   @State private var testSucceeded = false
   private let testActionExecutor = ActionExecutor()
 
+  let presentation: ButtonEditorPresentation
   let onSave: (ButtonConfig) -> Void
+  let onCancel: (() -> Void)?
 
   init(button: ButtonConfig, onSave: @escaping (ButtonConfig) -> Void) {
+    self.presentation = .sheet
+    self.onCancel = nil
     _draft = State(initialValue: button)
+    _editStep = State(initialValue: .action)
+    _automaticallyNamesButton = State(
+      initialValue: button.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        || button.label == "新しいボタン"
+    )
+    _automaticallyPicksIcon = State(
+      initialValue: button.iconKind == .sfSymbol
+        && (button.iconName.isEmpty || button.iconName == "square.grid.2x2")
+    )
+    self.onSave = onSave
+  }
+
+  init(
+    button: ButtonConfig,
+    presentation: ButtonEditorPresentation,
+    onSave: @escaping (ButtonConfig) -> Void,
+    onCancel: @escaping () -> Void
+  ) {
+    self.presentation = presentation
+    self.onCancel = onCancel
+    _draft = State(initialValue: button)
+    _editStep = State(initialValue: .parameters)
     _automaticallyNamesButton = State(
       initialValue: button.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         || button.label == "新しいボタン"
@@ -218,77 +249,14 @@ struct ButtonEditorView: View {
   }
 
   var body: some View {
-    NavigationStack {
-      Form {
-        switch editStep {
-        case .action:
-          actionSelectionSections
-
-        case .parameters:
-          Section("選択したアクション") {
-            Label(selectedActionTitle, systemImage: selectedActionImage)
-          }
-          Section {
-            actionParameterFields
-          } header: {
-            Text(parameterSectionTitle)
-          } footer: {
-            if let parameterSectionFooter {
-              Text(parameterSectionFooter)
-                .foregroundStyle(.secondary)
-            }
-          }
-
-          testRunSection
-
-        case .appearance:
-          Section("表示") {
-            TextField("ラベル", text: labelBinding)
-            iconSection
-          }
-        }
-      }
-      .formStyle(.grouped)
-      .scrollContentBackground(.hidden)
-      .background(
-        LinearGradient(
-          colors: [GamingPalette.background, GamingPalette.backgroundElevated],
-          startPoint: .topLeading,
-          endPoint: .bottomTrailing
-        )
-        .ignoresSafeArea()
-      )
-      .tint(GamingPalette.accent)
-      .navigationTitle(navigationTitleText)
-      .toolbar {
-        ToolbarItem(placement: .cancellationAction) {
-          Button(editStep == .action ? "キャンセル" : "戻る") {
-            switch editStep {
-            case .action:
-              dismiss()
-            case .parameters:
-              editStep = .action
-            case .appearance:
-              editStep = .parameters
-            }
-          }
-        }
-        if editStep != .action {
-          ToolbarItem(placement: .confirmationAction) {
-            Button(editStep == .parameters ? "次へ" : "保存") {
-              if editStep == .parameters {
-                prepareAppearance()
-                editStep = .appearance
-              } else {
-                onSave(draft)
-                dismiss()
-              }
-            }
-          }
-        }
+    Group {
+      switch presentation {
+      case .sheet:
+        sheetBody
+      case .inspector:
+        inspectorBody
       }
     }
-    .frame(minWidth: 480, minHeight: 520)
     .onChange(of: editStep) { _, _ in
       // 記録中に別のステップへ移動した場合、監視を外し忘れるとキー入力が
       // アプリ全体で消費され続けてしまうため、画面遷移のたびに必ず止める
@@ -297,6 +265,329 @@ struct ButtonEditorView: View {
     .onDisappear {
       // シート自体が閉じられた場合の保険として、監視を確実に解除する
       removeHotkeyMonitor()
+    }
+  }
+
+  private var sheetBody: some View {
+    NavigationStack {
+      editorForm
+        .navigationTitle(navigationTitleText)
+        .toolbar {
+          ToolbarItem(placement: .cancellationAction) {
+            Button(editStep == .action ? "キャンセル" : "戻る") {
+              switch editStep {
+              case .action:
+                dismiss()
+              case .parameters:
+                editStep = .action
+              case .appearance:
+                editStep = .parameters
+              }
+            }
+          }
+          if editStep != .action {
+            ToolbarItem(placement: .confirmationAction) {
+              Button(editStep == .parameters ? "次へ" : "保存") {
+                if editStep == .parameters {
+                  prepareAppearance()
+                  editStep = .appearance
+                } else {
+                  onSave(draft)
+                  dismiss()
+                }
+              }
+            }
+          }
+        }
+    }
+    .frame(minWidth: 480, minHeight: 520)
+  }
+
+  private var editorForm: some View {
+    Form {
+      switch editStep {
+      case .action:
+        actionSelectionSections
+
+      case .parameters:
+        Section("選択したアクション") {
+          Label(selectedActionTitle, systemImage: selectedActionImage)
+        }
+        Section {
+          actionParameterFields
+        } header: {
+          Text(parameterSectionTitle)
+        } footer: {
+          if let parameterSectionFooter {
+            Text(parameterSectionFooter)
+              .foregroundStyle(.secondary)
+          }
+        }
+
+        testRunSection
+
+      case .appearance:
+        Section("表示") {
+          TextField("ラベル", text: labelBinding)
+          iconSection
+        }
+      }
+    }
+    .formStyle(.grouped)
+    .scrollContentBackground(.hidden)
+    .background(
+      LinearGradient(
+        colors: [GamingPalette.background, GamingPalette.backgroundElevated],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+      )
+      .ignoresSafeArea()
+    )
+    .tint(GamingPalette.accent)
+  }
+
+  private var inspectorBody: some View {
+    VStack(spacing: 0) {
+      HStack(spacing: 10) {
+        ZStack {
+          RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(GamingPalette.accent.opacity(0.2))
+          Image(systemName: selectedActionImage)
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(GamingPalette.accent)
+        }
+        .frame(width: 38, height: 38)
+
+        VStack(alignment: .leading, spacing: 2) {
+          Text("ボタン設定")
+            .font(.headline.weight(.semibold))
+            .foregroundStyle(GamingPalette.foreground)
+          Text(draft.label.isEmpty ? "新しいボタン" : draft.label)
+            .font(.caption)
+            .foregroundStyle(GamingPalette.mutedForeground)
+            .lineLimit(1)
+        }
+
+        Spacer()
+
+        Button {
+          onCancel?()
+        } label: {
+          Image(systemName: "xmark")
+            .font(.caption.weight(.bold))
+            .foregroundStyle(GamingPalette.mutedForeground)
+            .frame(width: 26, height: 26)
+        }
+        .buttonStyle(.plain)
+        .help("選択を解除")
+      }
+      .padding(.horizontal, 16)
+      .padding(.vertical, 13)
+      .background(.ultraThinMaterial)
+
+      Divider()
+        .overlay(GamingPalette.accent.opacity(0.2))
+
+      ScrollView {
+        VStack(alignment: .leading, spacing: 14) {
+          inspectorSection(title: "表示", systemImage: "paintbrush.fill") {
+            inspectorAppearanceContent
+          }
+
+          inspectorSection(title: "機能", systemImage: "bolt.fill") {
+            inspectorActionContent
+          }
+
+          inspectorSection(title: parameterSectionTitle, systemImage: selectedActionImage) {
+            actionParameterFields
+              .frame(maxWidth: .infinity, alignment: .leading)
+
+            if let parameterSectionFooter {
+              Text(parameterSectionFooter)
+                .font(.caption2)
+                .foregroundStyle(GamingPalette.mutedForeground)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+          }
+
+          inspectorTestContent
+        }
+        .padding(14)
+      }
+
+      Divider()
+        .overlay(GamingPalette.accent.opacity(0.2))
+
+      HStack(spacing: 10) {
+        Button("キャンセル") {
+          onCancel?()
+        }
+        .buttonStyle(GamingButtonStyle())
+
+        Button("保存") {
+          onSave(draft)
+        }
+        .buttonStyle(GamingButtonStyle(isProminent: true))
+      }
+      .frame(maxWidth: .infinity, alignment: .trailing)
+      .padding(12)
+      .background(.ultraThinMaterial)
+    }
+    .background(GamingPalette.background.opacity(0.92))
+  }
+
+  private func inspectorSection<Content: View>(
+    title: String,
+    systemImage: String,
+    @ViewBuilder content: () -> Content
+  ) -> some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Label(title, systemImage: systemImage)
+        .font(.caption.weight(.bold))
+        .foregroundStyle(GamingPalette.foreground)
+
+      content()
+        .padding(11)
+        .background(GamingPalette.card.opacity(0.78), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+          RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .stroke(GamingPalette.accent.opacity(0.24), lineWidth: 1)
+        )
+    }
+  }
+
+  private var inspectorAppearanceContent: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      TextField("ボタンのラベル", text: labelBinding)
+        .gamingField(cornerRadius: 8)
+
+      HStack(spacing: 8) {
+        Image(systemName: draft.iconName.isEmpty ? "questionmark.square.dashed" : draft.iconName)
+          .font(.system(size: 18))
+          .frame(width: 28, height: 28)
+          .foregroundStyle(GamingPalette.accent)
+        Text(draft.iconName.isEmpty ? "アイコン未選択" : draft.iconName)
+          .font(.caption)
+          .foregroundStyle(GamingPalette.mutedForeground)
+          .lineLimit(1)
+        Spacer()
+      }
+
+      if draft.iconKind == .image {
+        Text("画像アイコン（iPad側で設定）")
+          .font(.caption2)
+          .foregroundStyle(GamingPalette.mutedForeground)
+      } else {
+        if !recommendedSFSymbols.isEmpty {
+          Text("おすすめ")
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(GamingPalette.mutedForeground)
+          iconGrid(recommendedSFSymbols)
+        }
+
+        DisclosureGroup("すべてのアイコン") {
+          iconGrid(commonSFSymbols)
+            .padding(.top, 6)
+        }
+        .font(.caption2.weight(.medium))
+        .foregroundStyle(GamingPalette.mutedForeground)
+
+        TextField("SF Symbol名を直接入力", text: iconNameBinding)
+          .font(.caption)
+          .gamingField(cornerRadius: 8)
+      }
+    }
+  }
+
+  private var inspectorActionContent: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      Text("よく使う機能を選ぶと、下の設定欄が切り替わります")
+        .font(.caption2)
+        .foregroundStyle(GamingPalette.mutedForeground)
+        .fixedSize(horizontal: false, vertical: true)
+
+      ForEach(actionChoiceGroups) { group in
+        VStack(alignment: .leading, spacing: 6) {
+          Text(group.title)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(GamingPalette.mutedForeground)
+
+          LazyVGrid(columns: [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)], spacing: 6) {
+            ForEach(group.choices) { choice in
+              inspectorActionChoice(choice)
+            }
+          }
+        }
+      }
+    }
+  }
+
+  private func inspectorActionChoice(_ choice: ActionChoice) -> some View {
+    let isSelected = draft.action.type == choice.type
+      && draft.action.mediaKey == choice.mediaKey
+      && draft.action.systemAction == choice.systemAction
+
+    return Button {
+      selectAction(choice)
+    } label: {
+      HStack(spacing: 6) {
+        Image(systemName: choice.systemImage)
+          .font(.caption.weight(.semibold))
+          .frame(width: 17)
+        Text(choice.title)
+          .font(.caption2.weight(.medium))
+          .lineLimit(2)
+          .minimumScaleFactor(0.8)
+          .multilineTextAlignment(.leading)
+        Spacer(minLength: 0)
+      }
+      .foregroundStyle(isSelected ? Color.white : GamingPalette.foreground)
+      .padding(.horizontal, 7)
+      .padding(.vertical, 8)
+      .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
+      .background(
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+          .fill(isSelected ? GamingPalette.accent : GamingPalette.muted.opacity(0.72))
+      )
+      .overlay(
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+          .stroke(isSelected ? Color.white.opacity(0.42) : GamingPalette.accent.opacity(0.16), lineWidth: 1)
+      )
+    }
+    .buttonStyle(.plain)
+    .help(choice.description)
+  }
+
+  @ViewBuilder
+  private var inspectorTestContent: some View {
+    if draft.action.type != .openFolder,
+       draft.action.type != .activateTab,
+       draft.action.type != .closeTab {
+      VStack(alignment: .leading, spacing: 8) {
+        Button {
+          runTest()
+        } label: {
+          Label(
+            isTestRunning ? "実行中…" : "このアクションをテスト実行",
+            systemImage: "play.circle"
+          )
+          .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(GamingButtonStyle())
+        .disabled(isTestRunning)
+
+        if let testResultMessage {
+          Label(
+            testResultMessage,
+            systemImage: testSucceeded ? "checkmark.circle.fill" : "exclamationmark.circle.fill"
+          )
+          .font(.caption2)
+          .foregroundStyle(testSucceeded ? GamingPalette.success : GamingPalette.destructive)
+          .fixedSize(horizontal: false, vertical: true)
+        }
+      }
+      .padding(11)
+      .background(GamingPalette.card.opacity(0.72), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
   }
 
@@ -433,9 +724,11 @@ struct ButtonEditorView: View {
     if automaticallyPicksIcon {
       draft.iconName = choice.systemImage
     }
-    // 選択直後にそのアクション専用の入力画面へ進む（選択画面に埋もれてURL入力欄などが
-    // 見落とされないようにするため）
-    editStep = .parameters
+    // シートでは選択直後に入力画面へ進む。常設インスペクタでは機能一覧を残したまま
+    // 下の設定欄だけを切り替え、グリッドとの対応を見失わないようにする。
+    if presentation == .sheet {
+      editStep = .parameters
+    }
   }
 
   // MARK: - アイコン選択
