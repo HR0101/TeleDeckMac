@@ -62,7 +62,7 @@ struct ProfileEditorView: View {
       }
     }
     .tint(GamingPalette.accent)
-    .frame(minWidth: 900, minHeight: 620)
+    .frame(minWidth: 1180, minHeight: 700)
     .preferredColorScheme(.dark)
     .onAppear {
       if selectedProfileId == nil {
@@ -495,7 +495,7 @@ private struct ProfileDetailView: View {
   /// 空 = プロファイル直下。末尾の要素が現在いるフォルダーのid（無限階層に対応するためスタックで管理）
   @State private var folderStack: [UUID] = []
   @State private var editingButton: ButtonConfig?
-  @State private var newButtonPosition: GridPosition?
+  @State private var isCreatingButton = false
   @State private var hoveredButtonId: UUID?
   @State private var hoveredEmptyCellId: String?
   @State private var buttonPendingDeletion: ButtonConfig?
@@ -526,38 +526,28 @@ private struct ProfileDetailView: View {
     ZStack {
       GamingBackground(animated: false)
 
-      ScrollView {
-        VStack(alignment: .leading, spacing: 18) {
-          profileInfoSection
-          buttonGridSection
+      HStack(spacing: 0) {
+        ScrollView {
+          VStack(alignment: .leading, spacing: 18) {
+            profileInfoSection
+            buttonGridSection
+          }
+          .padding(24)
+          .frame(maxWidth: 980)
+          .frame(maxWidth: .infinity)
         }
-        .padding(24)
-        .frame(maxWidth: 980)
-        .frame(maxWidth: .infinity)
+
+        Rectangle()
+          .fill(GamingPalette.accent.opacity(0.22))
+          .frame(width: 1)
+
+        buttonInspector
+          .frame(width: 370)
       }
     }
     .navigationTitle(profile.name)
     .onAppear {
       nameDraft = profile.name
-    }
-    .sheet(item: $editingButton) { button in
-      ButtonEditorView(button: button) { updated in
-        profileStore.updateButton(updated, inProfile: profileId)
-      }
-    }
-    .sheet(item: $newButtonPosition) { position in
-      ButtonEditorView(
-        button: ButtonConfig(
-          row: position.row,
-          col: position.col,
-          label: "新しいボタン",
-          iconName: "square.grid.2x2",
-          action: ActionPayload(type: .launchApp, target: ""),
-          folderId: folderStack.last
-        )
-      ) { created in
-        profileStore.addButton(created, toProfile: profileId)
-      }
     }
     .confirmationDialog(
       "「\(buttonPendingDeletion?.label ?? "ボタン")」を削除しますか？",
@@ -620,6 +610,92 @@ private struct ProfileDetailView: View {
     } message: {
       Text(dropErrorMessage ?? "")
     }
+  }
+
+  @ViewBuilder
+  private var buttonInspector: some View {
+    if let editingButton {
+      ButtonEditorView(
+        button: editingButton,
+        presentation: .inspector,
+        onSave: { updated in
+          if isCreatingButton {
+            profileStore.addButton(updated, toProfile: profileId)
+            isCreatingButton = false
+          } else {
+            profileStore.updateButton(updated, inProfile: profileId)
+          }
+          self.editingButton = updated
+        },
+        onCancel: {
+          self.editingButton = nil
+          isCreatingButton = false
+        }
+      )
+      .id(editingButton.id)
+    } else {
+      VStack(spacing: 14) {
+        Image(systemName: "slider.horizontal.3")
+          .font(.system(size: 28, weight: .medium))
+          .foregroundStyle(GamingPalette.accent)
+          .frame(width: 58, height: 58)
+          .background(GamingPalette.accent.opacity(0.14), in: Circle())
+
+        VStack(spacing: 5) {
+          Text("ボタンを選択")
+            .font(.headline.weight(.semibold))
+            .foregroundStyle(GamingPalette.foreground)
+          Text("中央のパネルからボタンを選ぶと、ここで機能・表示・詳細をまとめて編集できます")
+            .font(.caption)
+            .foregroundStyle(GamingPalette.mutedForeground)
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+
+        Button {
+          addButtonAtFirstAvailable()
+        } label: {
+          Label("ボタンを追加", systemImage: "plus")
+        }
+        .buttonStyle(GamingButtonStyle(isProminent: true))
+      }
+      .padding(28)
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+  }
+
+  private func selectButton(_ button: ButtonConfig) {
+    isCreatingButton = false
+    editingButton = button
+  }
+
+  private func beginCreatingButton(at position: GridPosition) {
+    isCreatingButton = true
+    editingButton = ButtonConfig(
+      row: position.row,
+      col: position.col,
+      label: "新しいボタン",
+      iconName: "square.grid.2x2",
+      action: ActionPayload(type: .launchApp, target: ""),
+      folderId: folderStack.last
+    )
+  }
+
+  private func addButtonAtFirstAvailable() {
+    let occupied = Set(visibleButtons.map { "\($0.row)-\($0.col)" })
+    let totalCells = profile.gridRows * profile.gridColumns
+    guard let index = (0..<totalCells).first(where: { index in
+      let row = index / profile.gridColumns
+      let col = index % profile.gridColumns
+      return !occupied.contains("\(row)-\(col)")
+    }) else {
+      dropErrorMessage = "空きマスがありません。行または列を増やしてください。"
+      return
+    }
+
+    beginCreatingButton(
+      at: GridPosition(row: index / profile.gridColumns, col: index % profile.gridColumns)
+    )
   }
 
   /// フォルダーボタンを削除する場合、中の子ボタンも一緒に削除されることを事前に警告する
@@ -819,6 +895,14 @@ private struct ProfileDetailView: View {
           }
         }
         Spacer()
+
+        Button {
+          addButtonAtFirstAvailable()
+        } label: {
+          Label("ボタンを追加", systemImage: "plus")
+            .font(.caption.weight(.semibold))
+        }
+        .buttonStyle(GamingButtonStyle(isProminent: true))
       }
 
       gridSizeControls
@@ -1070,7 +1154,7 @@ private struct ProfileDetailView: View {
           if button.action.type == .openFolder {
             folderStack.append(button.id)
           } else {
-            editingButton = button
+            selectButton(button)
           }
         } label: {
           VStack(spacing: 6) {
@@ -1085,7 +1169,10 @@ private struct ProfileDetailView: View {
           }
           .padding(8)
           .frame(width: proxy.size.width, height: proxy.size.height)
-          .macStreamDeckGlassTile(isHovered: hoveredButtonId == button.id)
+          .macStreamDeckGlassTile(
+            isHovered: hoveredButtonId == button.id,
+            isSelected: editingButton?.id == button.id
+          )
           .overlay(alignment: .bottomTrailing) {
             if button.action.type == .openFolder {
               Image(systemName: "chevron.right.circle.fill")
@@ -1100,7 +1187,7 @@ private struct ProfileDetailView: View {
         if hoveredButtonId == button.id {
           HStack(spacing: 5) {
             Button {
-              editingButton = button
+              selectButton(button)
             } label: {
               Image(systemName: "pencil.circle.fill")
                 .foregroundStyle(GamingPalette.accent)
@@ -1169,7 +1256,7 @@ private struct ProfileDetailView: View {
 
     return GeometryReader { proxy in
       Button {
-        newButtonPosition = GridPosition(row: row, col: col)
+        beginCreatingButton(at: GridPosition(row: row, col: col))
       } label: {
         VStack(spacing: 7) {
           ZStack {
@@ -1209,6 +1296,7 @@ private struct ProfileDetailView: View {
 private struct MacStreamDeckGlassTileModifier: ViewModifier {
   let isHovered: Bool
   let isEmpty: Bool
+  let isSelected: Bool
 
   func body(content: Content) -> some View {
     content
@@ -1243,13 +1331,13 @@ private struct MacStreamDeckGlassTileModifier: ViewModifier {
             LinearGradient(
               colors: [
                 .white.opacity(isEmpty ? 0.16 : 0.48),
-                GamingPalette.accent.opacity(isHovered ? 0.9 : 0.28),
+                GamingPalette.accent.opacity(isSelected ? 1.0 : (isHovered ? 0.9 : 0.28)),
                 .black.opacity(0.55)
               ],
               startPoint: .topLeading,
               endPoint: .bottomTrailing
             ),
-            style: StrokeStyle(lineWidth: isHovered ? 1.5 : 1, dash: isEmpty ? [4, 4] : [])
+            style: StrokeStyle(lineWidth: isSelected ? 2.2 : (isHovered ? 1.5 : 1), dash: isEmpty ? [4, 4] : [])
           )
       }
       .overlay(alignment: .top) {
@@ -1259,7 +1347,7 @@ private struct MacStreamDeckGlassTileModifier: ViewModifier {
           .padding(.top, 4)
       }
       .shadow(color: .black.opacity(isEmpty ? 0.12 : 0.34), radius: 7, y: 4)
-      .shadow(color: GamingPalette.accent.opacity(isHovered ? 0.3 : 0.1), radius: 10)
+      .shadow(color: GamingPalette.accent.opacity(isSelected ? 0.55 : (isHovered ? 0.3 : 0.1)), radius: isSelected ? 14 : 10)
   }
 }
 
@@ -1282,8 +1370,12 @@ private struct MacPanelGridButtonStyle: ButtonStyle {
 }
 
 private extension View {
-  func macStreamDeckGlassTile(isHovered: Bool, isEmpty: Bool = false) -> some View {
-    modifier(MacStreamDeckGlassTileModifier(isHovered: isHovered, isEmpty: isEmpty))
+  func macStreamDeckGlassTile(
+    isHovered: Bool,
+    isEmpty: Bool = false,
+    isSelected: Bool = false
+  ) -> some View {
+    modifier(MacStreamDeckGlassTileModifier(isHovered: isHovered, isEmpty: isEmpty, isSelected: isSelected))
   }
 }
 
