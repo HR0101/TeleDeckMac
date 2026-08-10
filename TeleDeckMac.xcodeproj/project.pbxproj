@@ -60,7 +60,7 @@
 		};
 		AA00SHAREDGRP00000000002 /* Shared */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = ../Shared;
+			path = Shared;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
