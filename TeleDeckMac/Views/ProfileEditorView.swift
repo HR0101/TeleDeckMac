@@ -526,23 +526,30 @@ private struct ProfileDetailView: View {
     ZStack {
       GamingBackground(animated: false)
 
-      HStack(spacing: 0) {
-        ScrollView {
-          VStack(alignment: .leading, spacing: 18) {
-            profileInfoSection
-            buttonGridSection
+      GeometryReader { geometry in
+        let inspectorWidth = self.inspectorWidth(for: geometry.size.width)
+
+        HStack(spacing: 0) {
+          ScrollView([.vertical, .horizontal]) {
+            VStack(alignment: .leading, spacing: 18) {
+              profileInfoSection
+              buttonGridSection
+            }
+            .padding(24)
+            .frame(maxWidth: 980)
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
           }
-          .padding(24)
-          .frame(maxWidth: 980)
-          .frame(maxWidth: .infinity)
+          .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
+          .layoutPriority(1)
+
+          Rectangle()
+            .fill(GamingPalette.accent.opacity(0.22))
+            .frame(width: 1)
+
+          buttonInspector
+            .frame(width: inspectorWidth)
+            .frame(minWidth: 0, maxHeight: .infinity)
         }
-
-        Rectangle()
-          .fill(GamingPalette.accent.opacity(0.22))
-          .frame(width: 1)
-
-        buttonInspector
-          .frame(width: 370)
       }
     }
     .navigationTitle(profile.name)
@@ -662,6 +669,11 @@ private struct ProfileDetailView: View {
       .padding(28)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+  }
+
+  /// 右ペインを固定幅にせず、ウインドウを狭めたときも中央ペインを残せる幅に調整する。
+  private func inspectorWidth(for availableWidth: CGFloat) -> CGFloat {
+    min(370, max(280, availableWidth * 0.34))
   }
 
   private func selectButton(_ button: ButtonConfig) {

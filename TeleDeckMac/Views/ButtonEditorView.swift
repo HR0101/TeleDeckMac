@@ -413,7 +413,9 @@ struct ButtonEditorView: View {
           inspectorTestContent
         }
         .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
       }
+      .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
 
       Divider()
         .overlay(GamingPalette.accent.opacity(0.2))
@@ -434,6 +436,7 @@ struct ButtonEditorView: View {
       .background(.ultraThinMaterial)
     }
     .background(GamingPalette.background.opacity(0.92))
+    .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
   }
 
   private func inspectorSection<Content: View>(
@@ -448,6 +451,7 @@ struct ButtonEditorView: View {
 
       content()
         .padding(11)
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
         .background(GamingPalette.card.opacity(0.78), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
           RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -512,7 +516,7 @@ struct ButtonEditorView: View {
             .font(.caption2.weight(.semibold))
             .foregroundStyle(GamingPalette.mutedForeground)
 
-          LazyVGrid(columns: [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)], spacing: 6) {
+          LazyVGrid(columns: [GridItem(.adaptive(minimum: 128), spacing: 6)], spacing: 6) {
             ForEach(group.choices) { choice in
               inspectorActionChoice(choice)
             }
@@ -539,6 +543,8 @@ struct ButtonEditorView: View {
           .lineLimit(2)
           .minimumScaleFactor(0.8)
           .multilineTextAlignment(.leading)
+          .fixedSize(horizontal: false, vertical: true)
+          .layoutPriority(1)
         Spacer(minLength: 0)
       }
       .foregroundStyle(isSelected ? Color.white : GamingPalette.foreground)
@@ -770,7 +776,7 @@ struct ButtonEditorView: View {
   }
 
   private func iconGrid(_ symbols: [String]) -> some View {
-    LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 6), spacing: 8) {
+    LazyVGrid(columns: [GridItem(.adaptive(minimum: 32, maximum: 36))], spacing: 8) {
       ForEach(symbols, id: \.self) { symbol in
         iconTile(symbol)
       }
