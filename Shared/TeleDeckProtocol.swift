@@ -35,6 +35,8 @@ enum ActionType: String, Codable {
   case quitApplication
   /// Finderで指定したフォルダを開く
   case openFinderFolder
+  /// Mac上の指定した場所に新しいフォルダを作成する
+  case createFinderFolder
   /// スリープ・画面ロック・スクリーンショットなど、システム全体に関わる操作を行う
   case systemAction
 }
@@ -44,6 +46,8 @@ struct ActionPayload: Codable {
   var type: ActionType
   /// launchApp / activateApplication: アプリ名またはBundle ID / openURL: URL文字列
   var target: String?
+  /// createFinderFolder: 作成するフォルダ名（targetは作成先ディレクトリ）
+  var folderName: String?
   /// hotkey: 送信するキーの組み合わせ（例: ["cmd", "c"]）
   var keys: [String]?
   /// typeText: 入力する定型文

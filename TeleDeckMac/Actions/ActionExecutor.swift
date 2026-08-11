@@ -21,6 +21,10 @@ final class ActionExecutor {
     case emptyText
     case invalidVolume(Int)
     case emptySteps
+    case folderDestinationNotFound(String)
+    case invalidFolderName
+    case folderAlreadyExists(String)
+    case folderCreationFailed(String)
     case appleScriptFailed(String)
     case accessibilityPermissionDenied
 
@@ -38,6 +42,14 @@ final class ActionExecutor {
         return "音量の値が不正です: \(value)"
       case .emptySteps:
         return "マルチアクションのステップが指定されていません"
+      case .folderDestinationNotFound(let path):
+        return "フォルダの作成先が見つかりません: \(path)"
+      case .invalidFolderName:
+        return "作成するフォルダ名が指定されていないか、使用できない文字が含まれています"
+      case .folderAlreadyExists(let path):
+        return "同じ名前のフォルダがすでに存在します: \(path)"
+      case .folderCreationFailed(let message):
+        return "フォルダを作成できませんでした: \(message)"
       case .appleScriptFailed(let message):
         return "AppleScriptの実行に失敗しました: \(message)"
       case .accessibilityPermissionDenied:
@@ -88,6 +100,12 @@ final class ActionExecutor {
       quitApplication(named: action.target, completion: completion)
     case .openFinderFolder:
       openFinderFolder(action.target, completion: completion)
+    case .createFinderFolder:
+      createFinderFolder(
+        in: action.target,
+        named: action.folderName,
+        completion: completion
+      )
     case .systemAction:
       sendSystemAction(action.systemAction, completion: completion)
     }
@@ -164,6 +182,55 @@ final class ActionExecutor {
     }
     NSWorkspace.shared.open(URL(fileURLWithPath: target))
     completion(.success(()))
+  }
+
+  // MARK: - createFinderFolder
+
+  /// 選択された作成先の直下に、1階層のフォルダを1つ作成する。
+  /// パス区切りを含む名前は拒否し、意図しない複数階層や作成先の外側を作らない。
+  private func createFinderFolder(
+    in parentPath: String?,
+    named folderName: String?,
+    completion: @escaping (Result<Void, Error>) -> Void
+  ) {
+    let trimmedParentPath = parentPath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    var isDirectory: ObjCBool = false
+    guard !trimmedParentPath.isEmpty,
+          FileManager.default.fileExists(atPath: trimmedParentPath, isDirectory: &isDirectory),
+          isDirectory.boolValue else {
+      completion(.failure(ExecutionError.folderDestinationNotFound(
+        trimmedParentPath.isEmpty ? "(未選択)" : trimmedParentPath
+      )))
+      return
+    }
+
+    let trimmedFolderName = folderName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let invalidNames: Set<String> = [".", ".."]
+    guard !trimmedFolderName.isEmpty,
+          !invalidNames.contains(trimmedFolderName),
+          !trimmedFolderName.contains("/"),
+          !trimmedFolderName.contains(":"),
+          !trimmedFolderName.contains("\0") else {
+      completion(.failure(ExecutionError.invalidFolderName))
+      return
+    }
+
+    let parentURL = URL(fileURLWithPath: trimmedParentPath, isDirectory: true)
+    let folderURL = parentURL.appendingPathComponent(trimmedFolderName, isDirectory: true)
+    guard !FileManager.default.fileExists(atPath: folderURL.path) else {
+      completion(.failure(ExecutionError.folderAlreadyExists(folderURL.path)))
+      return
+    }
+
+    do {
+      try FileManager.default.createDirectory(
+        at: folderURL,
+        withIntermediateDirectories: false
+      )
+      completion(.success(()))
+    } catch {
+      completion(.failure(ExecutionError.folderCreationFailed(error.localizedDescription)))
+    }
   }
 
   // MARK: - openURL
