@@ -526,23 +526,29 @@ private struct ProfileDetailView: View {
     ZStack {
       GamingBackground(animated: false)
 
-      HStack(spacing: 0) {
-        ScrollView {
-          VStack(alignment: .leading, spacing: 18) {
-            profileInfoSection
-            buttonGridSection
+      GeometryReader { geometry in
+        let inspectorWidth = self.inspectorWidth(for: geometry.size.width)
+        let centerWidth = max(0, geometry.size.width - inspectorWidth - 1)
+
+        HStack(spacing: 0) {
+          ScrollView([.vertical, .horizontal]) {
+            VStack(alignment: .leading, spacing: 18) {
+              profileInfoSection
+              buttonGridSection
+            }
+            .padding(24)
+            .frame(width: centerWidth, alignment: .leading)
           }
-          .padding(24)
-          .frame(maxWidth: 980)
-          .frame(maxWidth: .infinity)
+          .frame(width: centerWidth, height: geometry.size.height)
+
+          Rectangle()
+            .fill(GamingPalette.accent.opacity(0.22))
+            .frame(width: 1)
+
+          buttonInspector
+            .frame(width: inspectorWidth)
+            .frame(minWidth: 0, maxHeight: .infinity)
         }
-
-        Rectangle()
-          .fill(GamingPalette.accent.opacity(0.22))
-          .frame(width: 1)
-
-        buttonInspector
-          .frame(width: 370)
       }
     }
     .navigationTitle(profile.name)
@@ -662,6 +668,11 @@ private struct ProfileDetailView: View {
       .padding(28)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+  }
+
+  /// 右ペインを固定幅にせず、ウインドウを狭めたときも中央ペインを残せる幅に調整する。
+  private func inspectorWidth(for availableWidth: CGFloat) -> CGFloat {
+    min(370, max(280, availableWidth * 0.34))
   }
 
   private func selectButton(_ button: ButtonConfig) {
@@ -826,6 +837,7 @@ private struct ProfileDetailView: View {
     }
     .padding(18)
     .gamingCard(cornerRadius: 16)
+    .frame(maxWidth: .infinity, alignment: .leading)
   }
 
   private func commitNameIfNeeded() {
@@ -929,6 +941,7 @@ private struct ProfileDetailView: View {
     }
     .padding(18)
     .gamingCard(cornerRadius: 16)
+    .frame(maxWidth: .infinity, alignment: .leading)
   }
 
   private var gridSizeControls: some View {
