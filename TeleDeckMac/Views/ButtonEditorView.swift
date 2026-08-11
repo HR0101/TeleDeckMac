@@ -153,7 +153,8 @@ private let actionChoiceGroups = [
     ActionChoice(type: .launchApp, title: "アプリケーションを開く", description: "Macのアプリケーションを起動します", systemImage: "macwindow"),
     ActionChoice(type: .quitApplication, title: "アプリケーションを終了", description: "起動中のMacアプリケーションを終了します", systemImage: "xmark.app"),
     ActionChoice(type: .typeText, title: "テキスト", description: "登録したテキストを入力します", systemImage: "text.cursor"),
-    ActionChoice(type: .openFinderFolder, title: "Finderでフォルダを開く", description: "指定したフォルダをFinderで開きます", systemImage: "folder")
+    ActionChoice(type: .openFinderFolder, title: "Finderでフォルダを開く", description: "指定したフォルダをFinderで開きます", systemImage: "folder"),
+    ActionChoice(type: .createFinderFolder, title: "Macにフォルダを作成", description: "選んだ場所に新しいフォルダを作成します", systemImage: "folder.badge.plus")
   ]),
   ActionChoiceGroup(title: "オーディオ・画面", choices: [
     ActionChoice(type: .setVolume, title: "音量を設定", description: "Macの出力音量を変更します", systemImage: "speaker.wave.2"),
@@ -180,7 +181,7 @@ private let actionChoiceGroups = [
   ]),
   ActionChoiceGroup(title: "操作", choices: [
     ActionChoice(type: .multiAction, title: "マルチアクション", description: "複数の操作を順番に実行します", systemImage: "list.number"),
-    ActionChoice(type: .openFolder, title: "フォルダを作成", description: "パネル内にボタンの階層を作ります", systemImage: "folder"),
+    ActionChoice(type: .openFolder, title: "ボタン階層を作成", description: "パネル内にボタンの階層を作ります", systemImage: "folder"),
     ActionChoice(type: .windowLayout, title: "ウィンドウ配置", description: "前面のウィンドウを指定位置へ移動します", systemImage: "rectangle.split.2x1")
   ])
 ]
@@ -714,9 +715,15 @@ struct ButtonEditorView: View {
   }
 
   private func selectAction(_ choice: ActionChoice) {
+    let previousType = draft.action.type
     draft.action.type = choice.type
     draft.action.mediaKey = choice.mediaKey
     draft.action.systemAction = choice.systemAction
+    if choice.type == .createFinderFolder, previousType != .createFinderFolder {
+      // URLやアプリ名など、前のアクションのtargetを作成先として誤用しない
+      draft.action.target = nil
+      draft.action.folderName = nil
+    }
     if choice.type == .windowLayout, draft.action.preset == nil {
       draft.action.preset = WindowLayoutPreset.leftHalf.rawValue
     }
@@ -822,7 +829,7 @@ struct ButtonEditorView: View {
       return ["keyboard", "command"]
     case .typeText:
       return ["text.cursor", "textformat", "pencil"]
-    case .openFinderFolder:
+    case .openFinderFolder, .createFinderFolder:
       return ["folder.fill", "folder", "tray.full"]
     case .openFolder:
       return ["folder.fill", "square.grid.2x2", "list.bullet"]
@@ -878,6 +885,7 @@ struct ButtonEditorView: View {
     case .launchApp, .activateApplication, .quitApplication: return "対象のアプリ"
     case .openURL: return "開くURL"
     case .openFinderFolder: return "対象のフォルダ"
+    case .createFinderFolder: return "作成するフォルダ"
     case .hotkey: return "送信するキー"
     case .typeText: return "入力するテキスト"
     case .setVolume: return "音量"
@@ -897,6 +905,8 @@ struct ButtonEditorView: View {
       return "例: https://www.google.com"
     case .openFinderFolder:
       return "Mac上の絶対パスを入力するか、「フォルダを選択...」から選んでください"
+    case .createFinderFolder:
+      return "作成先は「作成先を選択...」から選んでください"
     default:
       return nil
     }
@@ -939,6 +949,8 @@ struct ButtonEditorView: View {
         .foregroundStyle(.secondary)
     case .openFinderFolder:
       openFinderFolderFields
+    case .createFinderFolder:
+      createFinderFolderFields
     }
   }
 
@@ -961,6 +973,24 @@ struct ButtonEditorView: View {
     VStack(alignment: .leading, spacing: 6) {
       TextField("フォルダのパス", text: targetBinding)
       Button("フォルダを選択...") {
+        chooseFolder()
+      }
+    }
+  }
+
+  private var createFinderFolderFields: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      TextField("新しいフォルダ名", text: folderNameBinding)
+      HStack(spacing: 8) {
+        Image(systemName: "folder")
+          .foregroundStyle(GamingPalette.accent)
+        Text(draft.action.target ?? "作成先未選択")
+          .font(.caption)
+          .foregroundStyle(GamingPalette.mutedForeground)
+          .lineLimit(2)
+          .textSelection(.enabled)
+      }
+      Button("作成先を選択...") {
         chooseFolder()
       }
     }
@@ -1353,6 +1383,12 @@ struct ButtonEditorView: View {
       return preset.displayName
     case .openFinderFolder:
       return folderDisplayName(from: draft.action.target) ?? selectedActionChoice?.title
+    case .createFinderFolder:
+      guard let folderName = draft.action.folderName?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !folderName.isEmpty else {
+        return selectedActionChoice?.title
+      }
+      return "\(folderName)を作成"
     case .multiAction, .openFolder, .mediaKey, .systemAction:
       return selectedActionChoice?.title
     case .activateTab, .closeTab:
@@ -1415,6 +1451,10 @@ struct ButtonEditorView: View {
 
   private var textBinding: Binding<String> {
     Binding(get: { draft.action.text ?? "" }, set: { draft.action.text = $0 })
+  }
+
+  private var folderNameBinding: Binding<String> {
+    Binding(get: { draft.action.folderName ?? "" }, set: { draft.action.folderName = $0 })
   }
 
   private var volumeBinding: Binding<Int> {
@@ -1514,7 +1554,7 @@ private struct StepRow: View {
     case .delay:
       Stepper("待機: \(step.ms ?? 500) ms", value: msBinding, in: 0...10000, step: 100)
     case .multiAction, .openFolder, .activateTab, .closeTab, .activateApplication, .windowLayout, .mediaKey,
-         .quitApplication, .openFinderFolder, .systemAction:
+         .quitApplication, .openFinderFolder, .createFinderFolder, .systemAction:
       // マルチアクションのステップには一部の高度なアクション・入れ子のマルチアクションを登録できない
       Text("マルチアクション内には登録できません")
         .font(.caption)

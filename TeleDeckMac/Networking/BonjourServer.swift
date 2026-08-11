@@ -49,6 +49,7 @@ final class BonjourServer {
       case .mediaKey: return "メディアキー"
       case .quitApplication: return "アプリを終了"
       case .openFinderFolder: return "Finderで開く"
+      case .createFinderFolder: return "フォルダを作成"
       case .systemAction: return "システム操作"
       }
     }
