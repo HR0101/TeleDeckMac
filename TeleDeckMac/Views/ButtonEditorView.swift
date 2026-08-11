@@ -10,8 +10,8 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// クイック選択できるSF Symbolsの一覧。ここに無いものは下の直接入力欄で指定する。
-/// カテゴリーごとにまとめ、よく使うボタンの用途を一通りタップだけで選べるようにしている
+/// GUIから選択できるSF Symbolsの一覧。
+/// カテゴリーごとにまとめ、よく使うボタンの用途を一通りクリックだけで選べるようにしている。
 private let commonSFSymbols = EditorIconCatalog.commonSFSymbols
 
 private let modifierKeys = ["cmd", "shift", "opt", "ctrl"]
@@ -470,7 +470,7 @@ struct ButtonEditorView: View {
           .font(.system(size: 18))
           .frame(width: 28, height: 28)
           .foregroundStyle(GamingPalette.accent)
-        Text(draft.iconName.isEmpty ? "アイコン未選択" : draft.iconName)
+        Text(draft.iconName.isEmpty ? "アイコン未選択" : "選択中のアイコン")
           .font(.caption)
           .foregroundStyle(GamingPalette.mutedForeground)
           .lineLimit(1)
@@ -495,10 +495,6 @@ struct ButtonEditorView: View {
         }
         .font(.caption2.weight(.medium))
         .foregroundStyle(GamingPalette.mutedForeground)
-
-        TextField("SF Symbol名を直接入力", text: iconNameBinding)
-          .font(.caption)
-          .gamingField(cornerRadius: 8)
       }
     }
   }
@@ -752,7 +748,7 @@ struct ButtonEditorView: View {
           Image(systemName: draft.iconName.isEmpty ? "questionmark.square.dashed" : draft.iconName)
             .font(.system(size: 22))
             .frame(width: 32, height: 32)
-          Text(draft.iconName.isEmpty ? "未選択" : draft.iconName)
+          Text(draft.iconName.isEmpty ? "アイコン未選択" : "選択中のアイコン")
             .font(.caption)
             .foregroundStyle(.secondary)
         }
@@ -768,9 +764,6 @@ struct ButtonEditorView: View {
           .font(.caption2)
           .foregroundStyle(.secondary)
         iconGrid(commonSFSymbols)
-
-        TextField("SF Symbol名を直接入力", text: iconNameBinding)
-          .font(.caption)
       }
     }
   }
@@ -802,16 +795,6 @@ struct ButtonEditorView: View {
         draft.iconName = symbol
         automaticallyPicksIcon = false
       }
-  }
-
-  private var iconNameBinding: Binding<String> {
-    Binding(
-      get: { draft.iconName },
-      set: {
-        draft.iconName = $0
-        automaticallyPicksIcon = false
-      }
-    )
   }
 
   /// 選んでいるアクションの機能に合ったアイコン候補。アクションの種類ごとに、
