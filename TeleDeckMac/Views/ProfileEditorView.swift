@@ -528,6 +528,7 @@ private struct ProfileDetailView: View {
 
       GeometryReader { geometry in
         let inspectorWidth = self.inspectorWidth(for: geometry.size.width)
+        let centerWidth = max(0, geometry.size.width - inspectorWidth - 1)
 
         HStack(spacing: 0) {
           ScrollView([.vertical, .horizontal]) {
@@ -536,11 +537,9 @@ private struct ProfileDetailView: View {
               buttonGridSection
             }
             .padding(24)
-            .frame(maxWidth: 980)
-            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+            .frame(width: centerWidth, alignment: .leading)
           }
-          .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
-          .layoutPriority(1)
+          .frame(width: centerWidth, height: geometry.size.height)
 
           Rectangle()
             .fill(GamingPalette.accent.opacity(0.22))
@@ -838,6 +837,7 @@ private struct ProfileDetailView: View {
     }
     .padding(18)
     .gamingCard(cornerRadius: 16)
+    .frame(maxWidth: .infinity, alignment: .leading)
   }
 
   private func commitNameIfNeeded() {
@@ -941,6 +941,7 @@ private struct ProfileDetailView: View {
     }
     .padding(18)
     .gamingCard(cornerRadius: 16)
+    .frame(maxWidth: .infinity, alignment: .leading)
   }
 
   private var gridSizeControls: some View {
