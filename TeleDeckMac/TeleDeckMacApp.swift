@@ -51,6 +51,8 @@ struct TeleDeckMacApp: App {
     Window("プロファイル設定", id: "profile-editor") {
       ProfileEditorView(profileStore: profileStore)
     }
-    .defaultSize(width: 820, height: 560)
+    // サイドバー・編集キャンバス・インスペクタを同時に見せるための初期サイズ。
+    // 実際の内容は狭い幅にも追従するが、起動直後から編集画面が見切れないようにする。
+    .defaultSize(width: 1180, height: 700)
   }
 }
